@@ -11,14 +11,17 @@
 > đặt ngay sau bảng/đoạn liên quan — nội dung gốc **không bị xóa hay ghi đè**, chỉ được chú thích để FE dễ dàng dò ra
 > chỗ nào đã đổi so với lần đọc trước.
 
-| Ngày       | Nội dung thay đổi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Mục liên quan                                          |
-| :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------- |
-| 2026-08-12 | **Phân công nhiều cán bộ & nhiều phòng ban**: API `assign` đổi từ 1 phòng ban + 1 cán bộ (`departmentId`, `assignedUserId`) sang danh sách (`department_ids[]`, `assigned_user_ids[]`). Bất kỳ ai trong danh sách được giao đều có thể `start-processing`/`submit-result`. Bỏ 2 cột `assigned_department_id`/`assigned_user_id` trên `urban_reports`, thay bằng 2 bảng liên kết `urban_report_assigned_departments`/`urban_report_assigned_users`.                                                                                                                                                                                                                                                                                                                                                                                                                   | §2.2, §3.1, §3.2/3.3, §4.3.2, §5.2.6, §6 Lưu ý 5       |
-| 2026-08-12 | **Chọn lĩnh vực ngay lúc tạo phản ánh**: thêm trường tùy chọn `field_id` vào API nộp phản ánh Zalo (`POST /public/urban-reports`) và tiếp nhận hộ qua hotline (`POST /urban-reports/manual-intake`). Không bắt buộc — hồ sơ vẫn có thể để trống `field_id` và chờ Chị Bình phân loại như luồng gốc.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | §5.1.1, §5.2.3                                         |
-| 2026-08-12 | **Bổ sung `field_name` vào `GET /urban-reports/detail`**: trước đó endpoint chi tiết chỉ trả `field_id` (UUID), không kèm tên lĩnh vực để FE hiển thị — buộc FE phải tự gọi thêm `GET /urban-report-fields` rồi tự map. Nay trả kèm luôn `field_name` (đã lookup sẵn ở BE), giống cách `GET /urban-reports` (danh sách) đã làm từ trước.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | §5.2.2                                                 |
-| 2026-08-12 | **Bỏ auto-merge, thay bằng "Gợi ý gộp"**: team quyết định hệ thống **không còn tự động gộp** hồ sơ trùng nữa — rủi ro gộp nhầm 2 vụ việc khác nhau mà không ai để ý. Khi phát hiện ứng viên trùng (vẫn cùng 3 điều kiện AND cũ), hệ thống chỉ tạo một **gợi ý** (`urban_report_merge_suggestions`, trạng thái `PENDING`) gắn trên hồ sơ mới, hồ sơ vẫn giữ nguyên `NEW`. Cán bộ xem gợi ý trong `GET /urban-reports/detail` (`merge_suggestions[]`), rồi tự quyết: xác nhận bằng API `merge` sẵn có, hoặc bỏ qua bằng API mới `POST /urban-reports/merge-suggestions/dismiss`. Gộp bởi hệ thống hoàn toàn biến mất — chỉ còn gộp thủ công bởi cán bộ.                                                                                                                                                                                                                | §1.2, §4.2, §4.3, §5.2.13 (mới)                        |
-| 2026-08-14 | **Gộp `NEW`/`DISTRIBUTING` thành một trạng thái duy nhất `WAITING` ("Chờ xử lý")** — BA phản hồi quy trình 8 trạng thái quá phức tạp, cán bộ khó theo dõi phải mở đúng tab mới thấy việc. Phản ánh mới (Zalo/hotline) giờ vào thẳng `WAITING`. **[v2, cùng ngày, sau khi rà lại 4 nút thao tác thật]**: `ACCEPT_INTAKE` **bị xóa hoàn toàn** (không chỉ "không đổi status" như v1) — chỉ còn `ASSIGN_OFFICER` ("Chuyển xử lý", vẫn `WAITING`) và `START_PROCESSING` ("Tiếp nhận xử lý", `WAITING`→`IN_PROGRESS`, nay tự động tự-giao-việc nếu hồ sơ chưa có ai nhận). `REJECT_REPORT` chỉ còn thực hiện được từ `WAITING`. `UNMERGE` trả hồ sơ về `WAITING` thay vì `NEW`. 2 mốc SLA (hạn tiếp nhận 24h, hạn xử lý 7 ngày) **giữ nguyên tách biệt như cũ** — quyết định (a), xem mục 4.4. Tab **"Tất cả"** được **khôi phục lại** (quyết định bỏ hôm qua đã bị hủy). | §1.1, §2.1, §2.2, §4.4, §5.2.1, §5.2.4, §5.2.6, §5.2.7 |
-| 2026-08-14 | **[v3, cùng ngày]** Rà lại lần nữa theo mockup FE thật: thêm **2 API mới** và **giới hạn lại `reject`**. `POST /urban-reports/classify` ("Phân loại lĩnh vực") — chỉ sửa `field_id`/`priority`, không giao việc, không đổi `status`, chỉ dùng được khi `WAITING`. `POST /urban-reports/decline-processing` ("Từ chối xử lý") — khác `reject`: **không** chuyển `REJECTED`, chỉ xóa phân công hiện tại (nếu có) và giữ nguyên `WAITING`, để hồ sơ "quay lại" hàng chờ chung; bắt buộc lý do. `reject` ("Từ chối phản ánh") giờ **chỉ dùng được khi chưa phân loại** (`field_id IS NULL`) — một khi đã có lĩnh vực, chỉ còn `decline-processing` khả dụng, trả `409` nếu vẫn gọi `reject`.                                                                                                                                                                             | §2.2, §5.2.4 (mới), §5.2.5, §5.2.6 (mới), §5.2.7       |
+| Ngày       | Nội dung thay đổi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Mục liên quan                                          |
+| :--------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------- |
+| 2026-09-15 | **Thu hẹp lĩnh vực của Dịch vụ đô thị số**: chỉ còn `CAY_XANH` và `HA_TANG_DO_THI`. `VE_SINH_MOI_TRUONG`, `AN_NINH_TRAT_TU`, `NGAP_UNG` thuộc các phân hệ riêng; không còn dùng `KHAC` vì hồ sơ chưa phân loại được giữ ở Work Items với `module_code = null`. Dữ liệu seed và catalog cũ đã được dọn tại local. | §3.3, danh mục lĩnh vực |
+| 2026-08-12 | **Phân công nhiều cán bộ & nhiều phòng ban**: API `assign` đổi từ 1 phòng ban + 1 cán bộ (`departmentId`, `assignedUserId`) sang danh sách (`department_ids[]`, `assigned_user_ids[]`). Bất kỳ ai trong danh sách được giao đều có thể `start-processing`/`submit-result`. Bỏ 2 cột `assigned_department_id`/`assigned_user_id` trên `urban_reports`, thay bằng 2 bảng liên kết `urban_report_assigned_departments`/`urban_report_assigned_users`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | §2.2, §3.1, §3.2/3.3, §4.3.2, §5.2.6, §6 Lưu ý 5       |
+| 2026-08-12 | **Chọn lĩnh vực ngay lúc tạo phản ánh**: thêm trường tùy chọn `field_id` vào API nộp phản ánh Zalo (`POST /public/urban-reports`) và tiếp nhận hộ qua hotline (`POST /urban-reports/manual-intake`). Không bắt buộc — hồ sơ vẫn có thể để trống `field_id` và chờ Chị Bình phân loại như luồng gốc.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | §5.1.1, §5.2.3                                         |
+| 2026-08-12 | **Bổ sung `field_name` vào `GET /urban-reports/detail`**: trước đó endpoint chi tiết chỉ trả `field_id` (UUID), không kèm tên lĩnh vực để FE hiển thị — buộc FE phải tự gọi thêm `GET /urban-report-fields` rồi tự map. Nay trả kèm luôn `field_name` (đã lookup sẵn ở BE), giống cách `GET /urban-reports` (danh sách) đã làm từ trước.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | §5.2.2                                                 |
+| 2026-08-12 | **Bỏ auto-merge, thay bằng "Gợi ý gộp"**: team quyết định hệ thống **không còn tự động gộp** hồ sơ trùng nữa — rủi ro gộp nhầm 2 vụ việc khác nhau mà không ai để ý. Khi phát hiện ứng viên trùng (vẫn cùng 3 điều kiện AND cũ), hệ thống chỉ tạo một **gợi ý** (`urban_report_merge_suggestions`, trạng thái `PENDING`) gắn trên hồ sơ mới, hồ sơ vẫn giữ nguyên `NEW`. Cán bộ xem gợi ý trong `GET /urban-reports/detail` (`merge_suggestions[]`), rồi tự quyết: xác nhận bằng API `merge` sẵn có, hoặc bỏ qua bằng API mới `POST /urban-reports/merge-suggestions/dismiss`. Gộp bởi hệ thống hoàn toàn biến mất — chỉ còn gộp thủ công bởi cán bộ.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | §1.2, §4.2, §4.3, §5.2.13 (mới)                        |
+| 2026-08-14 | **Gộp `NEW`/`DISTRIBUTING` thành một trạng thái duy nhất `WAITING` ("Chờ xử lý")** — BA phản hồi quy trình 8 trạng thái quá phức tạp, cán bộ khó theo dõi phải mở đúng tab mới thấy việc. Phản ánh mới (Zalo/hotline) giờ vào thẳng `WAITING`. **[v2, cùng ngày, sau khi rà lại 4 nút thao tác thật]**: `ACCEPT_INTAKE` **bị xóa hoàn toàn** (không chỉ "không đổi status" như v1) — chỉ còn `ASSIGN_OFFICER` ("Chuyển xử lý", vẫn `WAITING`) và `START_PROCESSING` ("Tiếp nhận xử lý", `WAITING`→`IN_PROGRESS`, nay tự động tự-giao-việc nếu hồ sơ chưa có ai nhận). `REJECT_REPORT` chỉ còn thực hiện được từ `WAITING`. `UNMERGE` trả hồ sơ về `WAITING` thay vì `NEW`. 2 mốc SLA (hạn tiếp nhận 24h, hạn xử lý 7 ngày) **giữ nguyên tách biệt như cũ** — quyết định (a), xem mục 4.4. Tab **"Tất cả"** được **khôi phục lại** (quyết định bỏ hôm qua đã bị hủy).                                                                                                                                                                                                                                                                                        | §1.1, §2.1, §2.2, §4.4, §5.2.1, §5.2.4, §5.2.6, §5.2.7 |
+| 2026-08-14 | **[v3, cùng ngày]** Rà lại lần nữa theo mockup FE thật: thêm **2 API mới** và **giới hạn lại `reject`**. `POST /urban-reports/classify` ("Phân loại lĩnh vực") — chỉ sửa `field_id`/`priority`, không giao việc, không đổi `status`, chỉ dùng được khi `WAITING`. `POST /urban-reports/decline-processing` ("Từ chối xử lý") — khác `reject`: **không** chuyển `REJECTED`, chỉ xóa phân công hiện tại (nếu có) và giữ nguyên `WAITING`, để hồ sơ "quay lại" hàng chờ chung; bắt buộc lý do. `reject` ("Từ chối phản ánh") giờ **chỉ dùng được khi chưa phân loại** (`field_id IS NULL`) — một khi đã có lĩnh vực, chỉ còn `decline-processing` khả dụng, trả `409` nếu vẫn gọi `reject`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | §2.2, §5.2.4 (mới), §5.2.5, §5.2.6 (mới), §5.2.7       |
+| 2026-08-24 | **Đối tác Zalo Mini App: xác thực client-credentials + API mới + callback**. Thống nhất với PM về tích hợp thật: (1) `submit`/`track` không còn `@Public()` — đổi route sang `partner/urban-reports/...`, yêu cầu token client-credentials của Keycloak client mới `urban-services-zalo-partner` (composite `urban-services-partner`, 2 role hẹp `urban-services.report.submit`/`.track`, **không** gắn `staff-base`). `public/urban-report-fields` giữ nguyên public. (2) **API mới** `GET /partner/urban-reports/mine` — danh sách phân trang "Phản ánh của tôi", lọc theo `reporter_phone` (không có `zalo_user_id` riêng). (3) Rate limit đổi từ theo IP sang theo tài khoản đối tác (`sub`), 300/phút. (4) **Callback ra ngoài mới** cho 2 sự kiện `START_PROCESSING`/`REJECT_REPORT`: gọi 1 lần sau khi commit (fire-and-forget, không chặn request của cán bộ), ký HMAC-SHA256 (`X-Signature`), không tự động thử lại — ghi log vào `urban_report_webhook_deliveries` để tra cứu thủ công. Việc gán role `urban-services-partner` cho service-account của client mới là **thao tác thủ công** trên Keycloak Admin Console (không có script tự động). | §2.3, §5.1, §5.2 (mới), §4.6 (mới)                     |
+| 2026-08-26 | **Bỏ nghiệp vụ "Thủ tục hành chính"**: chưa từng được code (chỉ tồn tại trong tài liệu thiết kế, không có entity/migration/API nào trong repo) và team quyết định không triển khai — xóa khỏi tài liệu để tránh nhầm là đang có/sắp có. Xóa bảng `administrative_procedures` (ERD §3.1, DDL §3.2), role `urban-services.procedure.manage` khỏi ma trận phân quyền (§2.3), và API `GET /public/administrative-procedures` khỏi §5.1 (renumber mục 4 "Bản đồ tiện ích đô thị" → mục 3).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | §2.3, §3.1, §3.2, §5.1                                 |
 
 ---
 
@@ -327,7 +330,6 @@ Quy chuẩn phân quyền tuân thủ 100% theo kiến trúc Keycloak của hệ
 | `urban-services.report.merge`         | Gộp / Tách phản ánh trùng (`merge`, `unmerge`)                                                               |      **x**       |    **x**     |      **x**       |                 |      **x**      |
 | `urban-services.report.comment`       | Gửi bình luận trao đổi nội bộ (`comments`)                                                                   |      **x**       |    **x**     |      **x**       |      **x**      |      **x**      |
 | `urban-services.field.manage`         | Quản lý danh mục lĩnh vực phản ánh                                                                           |                  |              |                  |                 |      **x**      |
-| `urban-services.procedure.manage`     | Quản lý danh mục thủ tục hành chính                                                                          |                  |              |                  |                 |      **x**      |
 | `urban-services.report.export`        | Xuất báo cáo thống kê SLA và tiến độ                                                                         |                  |              |                  |      **x**      |      **x**      |
 
 > **Chiến lược áp dụng thực tế:**
@@ -335,6 +337,23 @@ Quy chuẩn phân quyền tuân thủ 100% theo kiến trúc Keycloak của hệ
 > - **Giai đoạn hiện tại chưa áp dụng RBAC theo action role**: mọi tài khoản có JWT hợp lệ đều được phép gọi các API nội bộ. Bảng bên trên là ma trận mục tiêu để chốt và bật ở giai đoạn sau; các guard nghiệp vụ theo trạng thái, assignee và dữ liệu hồ sơ vẫn bắt buộc thực thi ngay.
 > - Giống như module **Market / Food Safety** và **Flood Events**, toàn bộ Action Roles và Composite Roles này được khai báo trước trong bảng ma trận và từ điển hằng số hệ thống (`auth.constants.ts`).
 > - Hiện tại, toàn bộ các route nội bộ được bảo vệ bởi **Global AuthGuard** (bắt buộc JWT token hợp lệ, ngoại trừ các route `@Public()` cho người dân). Việc gắn `@RequireRole(...)` cứng trên từng endpoint sẽ được kích hoạt đồng bộ khi cấu hình Realm trên Keycloak được triển khai hoàn chỉnh.
+
+> 🔄 **CẬP NHẬT 2026-08-24**: câu "chưa áp dụng RBAC theo action role" ở trên **không còn đúng cho 3 API đối tác**
+> (`submit`/`track`/`mine`, xem §5.2 mục Đối tác) — đây là ngoại lệ đầu tiên có `@RequireRole` thật, vì lý do bảo mật
+> (endpoint gửi phản ánh công khai không xác thực là rủi ro thật khi có đối tác tích hợp production, không còn là
+> chỗ giữ tên). 2 role mới, hẹp, riêng cho tài khoản dịch vụ (client-credentials) của đối tác Zalo Mini App:
+>
+> | Action Role                    | Ý nghĩa hành động                                                         | Partner (client-credentials) |
+> | :----------------------------- | :------------------------------------------------------------------------ | :--------------------------: |
+> | `urban-services.report.submit` | Gửi phản ánh thay người dân (`POST /partner/urban-reports`)               |            **x**             |
+> | `urban-services.report.track`  | Tra cứu/liệt kê phản ánh (`GET /partner/urban-reports/tracking`, `/mine`) |            **x**             |
+>
+> Composite `urban-services-partner` chỉ chứa đúng 2 role này — **không** có `staff-base` (tài khoản máy, không phải
+> cán bộ, không cần quyền xem dashboard nội bộ). Client Keycloak mới `urban-services-zalo-partner`
+> (`serviceAccountsEnabled: true`, không có luồng đăng nhập tương tác nào khác). Việc gán composite này cho
+> service-account của client là **thao tác thủ công** trên Keycloak Admin Console (Clients → `urban-services-zalo-partner`
+> → Service account roles) — không có script tự động, vì file `keycloak/realm-phohien.json` bị cấm chứa mục `users`
+> (kể cả service-account "user" mà Keycloak tự tạo).
 
 ---
 
@@ -505,18 +524,6 @@ erDiagram
         timestamptz created_at
     }
 
-    ADMINISTRATIVE_PROCEDURES {
-        uuid id PK "gen_random_uuid()"
-        varchar procedure_code UK
-        varchar title
-        uuid department_id FK
-        text description
-        varchar dvc_url
-        varchar vneid_url
-        boolean is_active
-        timestamptz created_at
-        timestamptz updated_at
-    }
 ```
 
 ---
@@ -560,7 +567,7 @@ CREATE INDEX idx_users_department_id ON users(department_id);
 -- Danh mục lĩnh vực phản ánh (UUID PK)
 CREATE TABLE urban_report_fields (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    code VARCHAR(50) UNIQUE NOT NULL, -- 'VE_SINH_MOI_TRUONG', 'CAY_XANH', 'AN_NINH_TRAT_TU', 'HA_TANG_DO_THI', 'NGAP_UNG'
+    code VARCHAR(50) UNIQUE NOT NULL, -- 'CAY_XANH', 'HA_TANG_DO_THI'
     name VARCHAR(255) NOT NULL,
     icon VARCHAR(100),
     default_sla_hours INT NOT NULL DEFAULT 168, -- 7 ngày = 168 giờ
@@ -699,20 +706,6 @@ CREATE TABLE urban_report_assigned_users (
 );
 
 CREATE INDEX idx_urban_report_assigned_users_user_id ON urban_report_assigned_users(user_id);
-
--- Bảng tra cứu thủ tục hành chính (UUID PK)
-CREATE TABLE administrative_procedures (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    procedure_code VARCHAR(100) UNIQUE NOT NULL,
-    title VARCHAR(500) NOT NULL,
-    department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
-    description TEXT,
-    dvc_url TEXT,
-    vneid_url TEXT,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 ```
 
 ---
@@ -966,6 +959,19 @@ Nguyên tắc triển khai:
 3. Notification consumer chịu trách nhiệm deduplicate, chọn kênh, gom thông báo và kiểm tra người nhận hiện tại. Nếu phân công bị xóa bởi `DECLINE_PROCESSING`, không gửi tiếp thông báo xử lý cho assignee cũ.
 4. Giai đoạn hiện tại chỉ giữ timeline và kế hoạch event; việc mở rộng publisher/consumer thực hiện trong task tích hợp Notification riêng.
 
+### 4.6. Callback ra ngoài cho đối tác Zalo Mini App
+
+> 🆕 **MỚI 2026-08-24**.
+
+Khác hoàn toàn với cơ chế Notification nội bộ ở §4.5 (dành cho cán bộ, dùng `notification_contacts`/`ExternalNotificationAdapter` keyed theo user nội bộ): đây là 1 cơ chế riêng, nhỏ, `UrbanReportWebhookService`, gọi thẳng ra 1 URL do đối tác đăng ký, không đi qua module Notification.
+
+- **Phạm vi sự kiện (giai đoạn 1)**: chỉ `START_PROCESSING` ("Tiếp nhận xử lý") và `REJECT_REPORT` ("Từ chối phản ánh"). Chưa gồm `DECLINE_PROCESSING`/`APPROVE_RESULT` — mở rộng ở giai đoạn sau.
+- **Thời điểm gọi**: sau khi transaction nghiệp vụ commit xong (đúng nguyên tắc 1 ở §4.5), và **không chờ kết quả** (`notify()` gọi kiểu fire-and-forget, không `await`) — request của cán bộ trả về ngay sau khi DB ghi xong, không bị treo nếu server đối tác chậm/sập.
+- **Độ tin cậy**: gọi đúng 1 lần, **không tự động thử lại** — nhất quán với quyết định "Option A" đã chốt từ đầu dự án cho toàn bộ phân hệ này (không Redis/EventEmitter2/`@Cron`). Mỗi lần gọi ghi 1 dòng vào bảng `urban_report_webhook_deliveries` (`report_id`, `event_type`, `target_url`, `status` SENT/FAILED, `http_status`, `error_message`, `attempted_at`) để tra cứu/gọi lại thủ công khi cần, không phải để 1 worker tự động replay.
+- **Xác thực chiều ngược**: body JSON ký bằng HMAC-SHA256 với 1 secret riêng (`URBAN_SERVICES_PARTNER_CALLBACK_SIGNING_SECRET`, khác với secret Keycloak dùng để đối tác lấy token ở §2.3), gửi kèm header `X-Signature` để đối tác xác minh request thực sự đến từ hệ thống.
+- **Payload**: `{ report_id, report_code, event_type, status, status_label, occurred_at }`.
+- **Cạnh tranh (concurrency)**: nếu 2 request cùng chạm 1 hồ sơ, `loadForUpdate` (khóa dòng `SELECT ... FOR UPDATE` sẵn có trong transaction) đã đảm bảo chỉ đúng 1 request thực sự chuyển trạng thái thành công (request còn lại nhận `409` từ guard trạng thái) — nên cũng chỉ đúng 1 callback được bắn cho mỗi lần chuyển trạng thái thật, không cần thêm cơ chế chống trùng nào khác.
+
 ---
 
 ## 5. DANH MỤC THIẾT KẾ RESTFUL API CONTRACTS & BẢNG THAM SỐ CHI TIẾT
@@ -980,10 +986,31 @@ Nguyên tắc triển khai:
 
 ### 5.1. Nhóm API dành cho Người dân (Public Endpoints — `@Public()`)
 
+> 🔄 **CẬP NHẬT 2026-08-24**: tên nhóm này giờ chỉ còn đúng cho mục 3 (danh mục lĩnh vực) — mục 1/2 và API mới ở
+> mục 2b **không còn `@Public()`** nữa, xem callout ngay dưới đây trước khi đọc từng mục.
+>
+> **3 nhóm route, 3 câu chuyện xác thực khác nhau** kể từ khi có đối tác Zalo Mini App thật cần tích hợp:
+>
+> - **Đối tác (client-credentials)** — `partner/urban-reports/...` (mục 1, 2, 2b bên dưới): đối tác tự đổi
+>   `client_id`/`client_secret` lấy access token ngắn hạn qua Keycloak (`POST {issuer}/protocol/openid-connect/token`,
+>   `grant_type=client_credentials`), rồi gọi kèm `Authorization: Bearer <token>`. Token chỉ mang đúng 2 quyền hẹp
+>   (`urban-services.report.submit`, `.track`) — không có quyền vào bất kỳ phân hệ nội bộ nào khác. Xem chi tiết ở
+>   §2.3.
+> - **Public thật** — `public/urban-report-fields` (mục 3): không cần token, dữ liệu tĩnh, không có thông tin người dân.
+> - **Nội bộ cán bộ** — `urban-reports/...` (toàn bộ §5.2): JWT cán bộ như trước giờ.
+>
+> Vì sao đổi: một endpoint gửi phản ánh công khai, không xác thực, là chấp nhận được khi chưa có đối tác thật nào
+> tích hợp — nhưng khi có một đối tác cụ thể gọi vào production, "ai cũng gọi được" trở thành lỗ hổng bảo mật thật,
+> không còn là sự đơn giản hóa tạm thời.
+
 #### 1. Gửi phản ánh hiện trường (Form tinh gọn)
 
-- **Endpoint**: `POST /api/v1/public/urban-reports`
-- **Mục đích**: Người dân gửi phản ánh từ Zalo Mini App.
+- **Endpoint**: `POST /api/v1/partner/urban-reports`
+- **Mục đích**: Đối tác (Zalo Mini App) gửi phản ánh thay người dân.
+
+> 🔄 **CẬP NHẬT 2026-08-24**: đổi từ `POST /api/v1/public/urban-reports` (không xác thực) sang route trên, yêu cầu
+> token client-credentials với quyền `urban-services.report.submit` (xem callout đầu §5.1). Rate limit đổi từ theo
+> IP (5/10 phút) sang theo tài khoản đối tác đã xác thực, 300/phút.
 
 > 🆕 **MỚI 2026-08-12**: thêm trường tùy chọn `field_id`. Luồng gốc (không chọn lĩnh vực, để Chị Bình phân loại sau)
 > **vẫn hoạt động y như cũ** — đây chỉ là bổ sung cho người dân nào tự tin phân loại được ngay lúc gửi.
@@ -1005,8 +1032,12 @@ Nguyên tắc triển khai:
 
 #### 2. Tra cứu tiến độ phản ánh hiện trường
 
-- **Endpoint**: `GET /api/v1/public/urban-reports/tracking`
-- **Mục đích**: Người dân nhập mã hồ sơ hoặc số điện thoại để xem tiến trình xử lý và ảnh kết quả.
+- **Endpoint**: `GET /api/v1/partner/urban-reports/tracking`
+- **Mục đích**: Đối tác tra cứu tiến trình xử lý và ảnh kết quả thay người dân.
+
+> 🔄 **CẬP NHẬT 2026-08-24**: đổi từ `GET /api/v1/public/urban-reports/tracking` sang route trên, yêu cầu token
+> client-credentials với quyền `urban-services.report.track` (xem callout đầu §5.1). Số điện thoại vẫn luôn được che
+> một phần (`reporter_phone_masked`) trong phản hồi như trước, không đổi.
 
 | Tên tham số (Param) | Vị trí      | Kiểu dữ liệu (Type) | Bắt buộc (Req/Opt) | Ý nghĩa & Ràng buộc chi tiết                                                        |
 | :------------------ | :---------- | :------------------ | :----------------- | :---------------------------------------------------------------------------------- |
@@ -1015,21 +1046,28 @@ Nguyên tắc triển khai:
 
 ---
 
-#### 3. Danh mục thủ tục hành chính
+#### 2b. Danh sách phản ánh của người dùng ("Phản ánh của tôi")
 
-- **Endpoint**: `GET /api/v1/public/administrative-procedures`
-- **Mục đích**: Tra cứu danh mục hướng dẫn thủ tục dịch vụ công trực tuyến.
+> 🆕 **MỚI 2026-08-24**.
 
-| Tên tham số (Param) | Vị trí      | Kiểu dữ liệu (Type) | Bắt buộc (Req/Opt) | Ý nghĩa & Ràng buộc chi tiết                              |
-| :------------------ | :---------- | :------------------ | :----------------- | :-------------------------------------------------------- |
-| `search`            | Query Param | `string`            | Tùy chọn           | Từ khóa tìm kiếm theo tên hoặc mã thủ tục.                |
-| `department_id`     | Query Param | `UUID`              | Tùy chọn           | Lọc theo UUID phòng ban quản lý thủ tục.                  |
-| `page`              | Query Param | `number`            | Tùy chọn           | Trang hiện tại (Mặc định `1`).                            |
-| `limit`             | Query Param | `number`            | Tùy chọn           | Số lượng bản ghi trên 1 trang (Mặc định `10`, max `100`). |
+- **Endpoint**: `GET /api/v1/partner/urban-reports/mine`
+- **Mục đích**: Màn hình "Phản ánh của tôi" trong mini app — chỉ hiển thị khi người dùng đồng ý chia sẻ số điện
+  thoại với mini app. Yêu cầu token client-credentials với quyền `urban-services.report.track` (cùng quyền với
+  mục 2).
+
+| Tên tham số (Param) | Vị trí      | Kiểu dữ liệu (Type) | Bắt buộc (Req/Opt) | Ý nghĩa & Ràng buộc chi tiết                                                                                                                           |
+| :------------------ | :---------- | :------------------ | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reporter_phone`    | Query Param | `string`            | **Bắt buộc**       | Số điện thoại của người dùng hiện tại. Xác định "phản ánh của ai" đơn thuần theo số điện thoại đã nhập lúc gửi (mục 1) — chưa có `zalo_user_id` riêng. |
+| `page`              | Query Param | `number`            | Tùy chọn           | Trang hiện tại (mặc định `1`).                                                                                                                         |
+| `limit`             | Query Param | `number`            | Tùy chọn           | Số bản ghi mỗi trang (mặc định `20`, tối đa `100`).                                                                                                    |
+
+Trả về mảng phân trang, mỗi phần tử gồm `report_code`, `status`, `status_label`, `title`, `address`, `field_name`,
+`reporter_phone_masked`, `created_at` — **không** có `assigned_users`/`assigned_departments` hay bất kỳ trường nội
+bộ nào khác (khác với `GET /urban-reports` ở §5.2 mục 1, dành cho cán bộ).
 
 ---
 
-#### 4. Bản đồ tiện ích đô thị
+#### 3. Bản đồ tiện ích đô thị
 
 - **Endpoint**: `GET /api/v1/public/map-utilities`
 - **Mục đích**: Hiển thị các điểm tiện ích trên bản đồ (Điểm thu gom rác, camera, trạm y tế...).
@@ -1383,7 +1421,19 @@ Dưới góc nhìn của Senior Backend 20 năm kinh nghiệm phát triển các
 1. **Bảo vệ Dữ liệu Cá nhân & Masking (Privacy by Design)**:
    - Số điện thoại công dân nộp phản ánh được ẩn dạng `0787***889` trên giao diện thông thường và API tra cứu công khai.
 2. **Chống Spam & DDOS tại Cổng nộp công cộng**:
-   - Áp dụng Rate Limiting: Tối đa 5 lượt gửi / 10 phút từ một địa chỉ IP / Device ID.
+   - 🔄 _2026-08-24_: cổng nộp không còn là `@Public()` — xem §5.1. Rate limit giờ tính theo tài khoản đối tác đã
+     xác thực (300/phút), không còn theo IP/Device ID nữa.
    - Quét và chặn upload file thực thi độc hại (`.exe`, `.sh`, `.php`), chỉ cho phép MIME type ảnh/video hợp lệ (`image/jpeg`, `image/png`, `video/mp4`) dung lượng tối đa 20MB.
 3. **Tính Bất biến của Lịch sử Xử lý (Audit Trail Immutability)**:
    - Bảng `urban_report_timelines` chỉ cho phép quyền `INSERT`, nghiêm cấm `UPDATE` hoặc `DELETE` để đảm bảo tính minh bạch, phục vụ thanh tra công vụ.
+4. 🆕 **Cấp quyền cho tài khoản đối tác Zalo Mini App (thao tác thủ công khi triển khai)**:
+   - Sau khi `pnpm run keycloak:apply` tạo xong client `urban-services-zalo-partner` và composite
+     `urban-services-partner`, phải vào **Keycloak Admin Console** → Clients → `urban-services-zalo-partner` →
+     tab **Service account roles** → gán composite `urban-services-partner` cho service-account của client này.
+   - Đây **không** phải một bước tự động — file `keycloak/realm-phohien.json` bị cấm chứa mục `users` (kể cả
+     service-account "user" mà Keycloak tự sinh ra), nên việc gán role này phải lặp lại thủ công ở **mỗi môi
+     trường** (dev, staging, production) mỗi khi client được tạo mới. Bỏ sót bước này khiến token của đối tác vẫn
+     xác thực được (issuer/audience hợp lệ) nhưng rỗng quyền — mọi request trả `403` mà không có gì để trỏ tới.
+   - Bí mật client (`URBAN_SERVICES_PARTNER_CLIENT_SECRET`) và bí mật ký callback
+     (`URBAN_SERVICES_PARTNER_CALLBACK_SIGNING_SECRET`) cấp cho đối tác qua kênh vận hành riêng, không qua tài
+     liệu/email thông thường.

@@ -12,7 +12,8 @@
 | 2026-09-15 | Pilot v4  | Refactor điểm tích hợp thành `WorkItemModuleRegistry` và adapter theo phân hệ; bỏ phụ thuộc trực tiếp `work-items -> urban-services` và bổ sung `module_record_code`.                                                                                                                    |
 | 2026-09-15 | v5        | Lõi trở thành cổng tiếp nhận duy nhất. Một công việc có nhiều nguồn: tách chống trùng thành ba mức (gửi lặp / tương quan tự động / soát trùng thủ công). Bổ sung hợp đồng adapter `canAccept` - `create` - `attach` - `appendSource` - `listStatuses` và bộ lọc trạng thái theo phân hệ. |
 | 2026-09-15 | v5.1      | Đã triển khai `POST /work-items/intake`, `GET /work-items/module-statuses`, bộ lọc `module_status`, kiểm tra `canAccept` ngay khi phân loại, API đọc/tách source và chuyển source/attachment khi xác nhận trùng. Urban Services ghi timeline khởi tạo khi hồ sơ được tạo từ Work Item.   |
-| 2026-09-15 | v5.2      | Hoàn thiện contract intake với attachment và giới hạn dữ liệu đầu vào; response camera phản ánh assignment thực tế. Chặn tách source khi chỉ có một nguồn, còn assignment hoặc đã materialize vào phân hệ. Khi hợp nhất nguồn, evidence được chuyển tiếp sang adapter của hồ sơ gốc. |
+| 2026-09-15 | v5.2      | Hoàn thiện contract intake với attachment và giới hạn dữ liệu đầu vào; response camera phản ánh assignment thực tế. Chặn tách source khi chỉ có một nguồn, còn assignment hoặc đã materialize vào phân hệ. Khi hợp nhất nguồn, evidence được chuyển tiếp sang adapter của hồ sơ gốc.     |
+| 2026-09-15 | v5.3      | Urban Services được refactor thành phân hệ native sau giao việc: gỡ API intake/phân loại/giao việc/từ chối/trùng riêng; endpoint Zalo Partner chuyển payload qua adapter vào Work Items. Xem `urban_services_work_items_integration.md`.                                                 |
 
 ## 1. Mục tiêu và phạm vi
 
@@ -251,6 +252,7 @@ Adapter trả `WorkItemModuleProjection` gồm `moduleRecordId`, `moduleRecordCo
 | `POST` | `/work-items/classify`             | Xác nhận lĩnh vực, phân hệ, ưu tiên và `module_payload`. |
 | `POST` | `/work-items/assign`               | Giao việc qua adapter.                                   |
 | `POST` | `/work-items/decline`              | Kết thúc trách nhiệm của cán bộ và trả việc khi cần.     |
+| `POST` | `/work-items/reject`               | Từ chối công việc chưa giao cho phân hệ nào.             |
 | `GET`  | `/work-items/sources`              | Danh sách nguồn của một công việc.                       |
 | `POST` | `/work-items/sources/split`        | Tách một nguồn thành công việc mới.                      |
 | `GET`  | `/work-items/duplicate-candidates` | Lấy gợi ý nghi trùng mức 3.                              |
@@ -267,6 +269,7 @@ Không có API common `/work-items/detail` và `/work-items/comments`. Danh sác
 - `module_code=UNCLASSIFIED` lọc các việc chưa có phân hệ.
 - `module_status` **chỉ hợp lệ khi có `module_code`** là một phân hệ cụ thể; gửi thiếu `module_code` trả 400. Lý do: trạng thái thuộc về phân hệ, không có nghĩa khi đứng một mình.
 - `module_status=UNASSIGNED` là giá trị đặc biệt, lọc các việc chưa giao trong phân hệ đó.
+- `is_rejected` đúng cho cả hai chiều: việc bị từ chối tại lõi trước khi giao (`rejection_reason` khác `null` và chưa có `module_record_id`), và việc bị phân hệ từ chối sau khi giao (adapter báo qua `getStatusMetadata`).
 - `scope=MINE` chỉ lấy việc có assignment người dùng hiện tại còn hiệu lực.
 - Mặc định danh sách ẩn bia mộ; muốn xem thì gửi tham số riêng.
 
@@ -349,6 +352,8 @@ Bước 1 đến 7 nằm trọn trong `src/modules/work-items` và không đụn
 - Truy vấn toàn bộ người phản ánh của một công việc chỉ cần một lệnh trên `work_item_sources`.
 - Tách một nguồn khỏi công việc tạo ra công việc mới độc lập với đúng attachment của nguồn đó.
 - `classify` chặn ngay khi phân hệ đích không nhận được công việc, và nêu rõ còn thiếu dữ liệu gì.
+- Công việc không hợp lệ được từ chối tại lõi khi chưa giao: ghi lý do, đóng khóa tương quan, giải phóng assignment và đóng mọi gợi ý nghi trùng còn treo.
+- Từ chối một công việc đã có hồ sơ tại phân hệ bị chặn; quyết định đó thuộc về phân hệ.
 - Giao nhiều người cho phân hệ chỉ nhận một người bị chặn với thông báo rõ ràng, không im lặng bỏ bớt.
 - Nguồn đến sau khi đã giao được đẩy sang phân hệ qua `appendSource`.
 - Tiếp nhận không tạo hồ sơ phân hệ; giao việc mới tạo hoặc gắn hồ sơ.

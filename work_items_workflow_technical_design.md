@@ -4,16 +4,18 @@
 
 ## Lịch sử thay đổi
 
-| Ngày       | Phiên bản | Nội dung                                                                                                                                                                                                                                                                                 |
-| ---------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-09-11 | Pilot v1  | Thiết kế và triển khai local lõi `work-items`, camera gateway, chống trùng, giao việc và tích hợp mẫu với `urban-services`.                                                                                                                                                              |
-| 2026-09-14 | Pilot v2  | Thu hẹp lõi còn 5 bảng; bỏ timeline, bình luận và chi tiết nghiệp vụ chung. Mỗi phân hệ tiếp tục sở hữu toàn bộ dữ liệu và lịch sử xử lý riêng.                                                                                                                                          |
-| 2026-09-14 | Pilot v3  | Bỏ trạng thái vòng đời chung khỏi `work_items`; danh sách hiển thị trạng thái gốc của phân hệ và chỉ còn phạm vi Tất cả công việc/Việc của tôi.                                                                                                                                          |
-| 2026-09-15 | Pilot v4  | Refactor điểm tích hợp thành `WorkItemModuleRegistry` và adapter theo phân hệ; bỏ phụ thuộc trực tiếp `work-items -> urban-services` và bổ sung `module_record_code`.                                                                                                                    |
-| 2026-09-15 | v5        | Lõi trở thành cổng tiếp nhận duy nhất. Một công việc có nhiều nguồn: tách chống trùng thành ba mức (gửi lặp / tương quan tự động / soát trùng thủ công). Bổ sung hợp đồng adapter `canAccept` - `create` - `attach` - `appendSource` - `listStatuses` và bộ lọc trạng thái theo phân hệ. |
-| 2026-09-15 | v5.1      | Đã triển khai `POST /work-items/intake`, `GET /work-items/module-statuses`, bộ lọc `module_status`, kiểm tra `canAccept` ngay khi phân loại, API đọc/tách source và chuyển source/attachment khi xác nhận trùng. Urban Services ghi timeline khởi tạo khi hồ sơ được tạo từ Work Item.   |
-| 2026-09-15 | v5.2      | Hoàn thiện contract intake với attachment và giới hạn dữ liệu đầu vào; response camera phản ánh assignment thực tế. Chặn tách source khi chỉ có một nguồn, còn assignment hoặc đã materialize vào phân hệ. Khi hợp nhất nguồn, evidence được chuyển tiếp sang adapter của hồ sơ gốc.     |
-| 2026-09-15 | v5.3      | Urban Services được refactor thành phân hệ native sau giao việc: gỡ API intake/phân loại/giao việc/từ chối/trùng riêng; endpoint Zalo Partner chuyển payload qua adapter vào Work Items. Xem `urban_services_work_items_integration.md`.                                                 |
+| Ngày       | Phiên bản | Nội dung                                                                                                                                                                                                                                                                                                           |
+| ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-09-11 | Pilot v1  | Thiết kế và triển khai local lõi `work-items`, camera gateway, chống trùng, giao việc và tích hợp mẫu với `urban-services`.                                                                                                                                                                                        |
+| 2026-09-14 | Pilot v2  | Thu hẹp lõi còn 5 bảng; bỏ timeline, bình luận và chi tiết nghiệp vụ chung. Mỗi phân hệ tiếp tục sở hữu toàn bộ dữ liệu và lịch sử xử lý riêng.                                                                                                                                                                    |
+| 2026-09-14 | Pilot v3  | Bỏ trạng thái vòng đời chung khỏi `work_items`; danh sách hiển thị trạng thái gốc của phân hệ và chỉ còn phạm vi Tất cả công việc/Việc của tôi.                                                                                                                                                                    |
+| 2026-09-15 | Pilot v4  | Refactor điểm tích hợp thành `WorkItemModuleRegistry` và adapter theo phân hệ; bỏ phụ thuộc trực tiếp `work-items -> urban-services` và bổ sung `module_record_code`.                                                                                                                                              |
+| 2026-09-15 | v5        | Lõi trở thành cổng tiếp nhận duy nhất. Một công việc có nhiều nguồn: tách chống trùng thành ba mức (gửi lặp / tương quan tự động / soát trùng thủ công). Bổ sung hợp đồng adapter `canAccept` - `create` - `attach` - `appendSource` - `listStatuses` và bộ lọc trạng thái theo phân hệ.                           |
+| 2026-09-15 | v5.1      | Đã triển khai `POST /work-items/intake`, `GET /work-items/module-statuses`, bộ lọc `module_status`, kiểm tra `canAccept` ngay khi phân loại, API đọc/tách source và chuyển source/attachment khi xác nhận trùng. Urban Services ghi timeline khởi tạo khi hồ sơ được tạo từ Work Item.                             |
+| 2026-09-15 | v5.2      | Hoàn thiện contract intake với attachment và giới hạn dữ liệu đầu vào; response camera phản ánh assignment thực tế. Chặn tách source khi chỉ có một nguồn, còn assignment hoặc đã materialize vào phân hệ. Khi hợp nhất nguồn, evidence được chuyển tiếp sang adapter của hồ sơ gốc.                               |
+| 2026-09-15 | v5.3      | Urban Services được refactor thành phân hệ native sau giao việc: gỡ API intake/phân loại/giao việc/từ chối/trùng riêng; endpoint Zalo Partner chuyển payload qua adapter vào Work Items. Xem `urban_services_work_items_integration.md`.                                                                           |
+| 2026-09-17 | v5.4      | Ngập úng có adapter (`FloodEventsWorkItemAdapter`). Hợp đồng adapter thêm `onCommitted`, `getResultPhotoUrls`; `confirmDuplicate` trả snapshot. Thêm `WorkItemTraceService`, lịch sử phản ánh người dân dùng chung mọi phân hệ, cờ `rejection_notifies_reporter`. Xem `flood_management_technical_design.md` (v2). |
+| 2026-09-18 | v5.5      | Bản đồ sự vụ chung `GET /work-items/map` đọc từ `work_items`; adapter khai báo trạng thái lên bản đồ (`listMapStatuses`) và mức độ tô màu (`getMapSeverity`). Cây xanh, đèn chiếu sáng giữ API riêng.                                                                                                              |
 
 ## 1. Mục tiêu và phạm vi
 
@@ -219,7 +221,13 @@ Mỗi phân hệ sở hữu một class triển khai `WorkItemModuleAdapter`, đ
 | `getStatusMetadata(status)`                            | Có       | Trả nhãn hiển thị, `isTerminal`, `isRejected` cho một mã trạng thái nguyên bản.                             |
 | `releaseAssignment(input, manager)`                    | Có       | Đồng bộ việc cán bộ từ chối hoặc trả trách nhiệm về assignment của phân hệ.                                 |
 | `getCategoryNames(codes)`                              | Không    | Trả tên lĩnh vực để màn danh sách không query bảng danh mục của phân hệ.                                    |
-| `confirmDuplicate` / `unlinkDuplicate`                 | Không    | Phản chiếu quyết định hợp nhất của lõi vào hồ sơ nội bộ nếu phân hệ cần.                                    |
+| `listCategories()`                                     | Không    | Danh mục lĩnh vực cho màn phân loại; không có thì dùng danh mục tạm.                                        |
+| `getResultPhotoUrls(recordIds)`                        | Không    | Ảnh sau xử lý theo hồ sơ, cho lịch sử phản ánh của người dân.                                               |
+| `listMapStatuses()`                                    | Không    | Trạng thái nguyên bản được lên bản đồ sự vụ. Không khai báo thì phân hệ không có lớp trên bản đồ.           |
+| `getMapSeverity(workItem)`                             | Không    | Mức độ để FE tô màu điểm, đọc từ `module_payload` của phân hệ.                                              |
+| `confirmDuplicate` / `unlinkDuplicate`                 | Không    | Phản chiếu quyết định hợp nhất của lõi vào hồ sơ nội bộ; trả snapshot mới của hồ sơ phụ nếu trạng thái đổi. |
+
+Input của `create`/`attach`/`releaseAssignment` có `onCommitted(callback)`: phân hệ đăng ký việc chỉ được chạy sau khi giao dịch giao việc commit, như đẩy thông báo realtime. Lõi chạy các callback sau commit và không để lỗi của chúng làm hỏng thao tác đã commit.
 
 `canAccept` là hàm quan trọng nhất của v5. Nó phải được gọi ở bước **phân loại**, không phải bước giao việc. Nếu chỉ kiểm tra lúc giao, cán bộ sẽ phân loại xong rồi mới biết phân hệ đích không nhận được, và công việc kẹt lại không đi tiếp được.
 
@@ -259,6 +267,18 @@ Adapter trả `WorkItemModuleProjection` gồm `moduleRecordId`, `moduleRecordCo
 | `POST` | `/work-items/duplicates/confirm`   | Xác nhận trùng và hợp nhất nguồn.                        |
 | `POST` | `/work-items/duplicates/dismiss`   | Bỏ qua gợi ý.                                            |
 | `POST` | `/work-items/duplicates/unlink`    | Tách khỏi công việc gốc.                                 |
+| `GET`  | `/work-items/map`                  | Bản đồ sự vụ của mọi phân hệ có khai báo lớp bản đồ.     |
+
+### 8.0. Bản đồ sự vụ
+
+Mọi lớp **sự vụ** (ngập úng, vệ sinh môi trường, an ninh trật tự…) lấy từ `work_items` qua một API; tài sản tĩnh (cây xanh, đèn chiếu sáng) giữ API riêng của phân hệ. `map_layers` chỉ là danh mục hiển thị.
+
+`GET /work-items/map?module_code=FLOOD_EVENTS,SANITATION&min_lat=&max_lat=&min_lng=&max_lng=`
+
+- `module_code` tùy chọn, nhiều giá trị ngăn cách bằng dấu phẩy; bỏ trống là mọi lớp. Khung nhìn tùy chọn.
+- Chỉ trả công việc chưa xóa, không phải bản ghi trùng, có tọa độ, và `module_status` thuộc `listMapStatuses()` của phân hệ. Tối đa 2000 điểm, mới nhất trước.
+- Mỗi điểm: `work_item_id`, `code`, `module_code`, `module_record_code`, `module_status`, `module_status_label`, `severity`, `title`, `address`, `latitude`, `longitude`, `priority`, `source_count`, `last_reported_at`.
+- Phân hệ chỉ có trên bản đồ này khi đã đi qua Công việc (có adapter). Hiện có Ngập úng (`VERIFIED`, `SUBMITTED`, `severity` = mức ngập); Dịch vụ đô thị số không khai báo lớp bản đồ.
 
 Không có API common `/work-items/detail` và `/work-items/comments`. Danh sách không trả timeline, comment hoặc lịch sử xử lý. Sau khi giao, FE điều hướng sang màn hình phân hệ bằng `module_code` và `module_record_id`.
 
@@ -314,6 +334,8 @@ Khi một công việc được xử lý xong tại phân hệ, **mọi người
 Đây chính là lý do thực tế để hợp nhất nguồn thay vì gắn nhãn trùng: sau khi hợp nhất, câu truy vấn là một lệnh trên `work_item_sources`; nếu để rải rác ở các công việc bị gắn nhãn thì phải đi vòng qua bảng con và rất dễ bỏ sót.
 
 Lõi cung cấp danh sách; việc phát thông báo thuộc về module thông báo. Cần chốt chủ sở hữu trước khi triển khai.
+
+**Đã chốt 2026-09-17:** không gửi thông báo đẩy cho người dân. Giao diện lịch sử phản ánh nhúng trong Zalo Mini App đọc `GET /work-items/citizen-reports/tracking|mine`; người dân thấy kết quả khi hồ sơ xong, và thấy lý do từ chối chỉ khi cán bộ chọn `notify_reporter`. Chi tiết: `flood_management_technical_design.md` §3.3.
 
 ## 12. Quyết định cần chốt
 

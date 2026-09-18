@@ -16,6 +16,7 @@
 | 2026-09-15 | v5.3      | Urban Services được refactor thành phân hệ native sau giao việc: gỡ API intake/phân loại/giao việc/từ chối/trùng riêng; endpoint Zalo Partner chuyển payload qua adapter vào Work Items. Xem `urban_services_work_items_integration.md`.                                                                           |
 | 2026-09-17 | v5.4      | Ngập úng có adapter (`FloodEventsWorkItemAdapter`). Hợp đồng adapter thêm `onCommitted`, `getResultPhotoUrls`; `confirmDuplicate` trả snapshot. Thêm `WorkItemTraceService`, lịch sử phản ánh người dân dùng chung mọi phân hệ, cờ `rejection_notifies_reporter`. Xem `flood_management_technical_design.md` (v2). |
 | 2026-09-18 | v5.5      | Bản đồ sự vụ chung `GET /work-items/map` đọc từ `work_items`; adapter khai báo trạng thái lên bản đồ (`listMapStatuses`) và mức độ tô màu (`getMapSeverity`). Cây xanh, đèn chiếu sáng giữ API riêng.                                                                                                              |
+| 2026-09-18 | v5.6      | `module_status=UNASSIGNED` không còn bắt buộc `module_code`; thêm `module_status=ASSIGNED`. Hai giá trị lọc việc chưa giao / đã giao trên mọi phân hệ (tab **Chưa giao**, **Đã giao**). Trạng thái riêng của phân hệ vẫn cần `module_code`.                                                                        |
 
 ## 1. Mục tiêu và phạm vi
 
@@ -287,8 +288,9 @@ Không có API common `/work-items/detail` và `/work-items/comments`. Danh sác
 `GET /work-items` nhận `page`, `limit`, `scope=ALL|MINE`, `module_code`, `module_status`, `source_type` và `search`.
 
 - `module_code=UNCLASSIFIED` lọc các việc chưa có phân hệ.
-- `module_status` **chỉ hợp lệ khi có `module_code`** là một phân hệ cụ thể; gửi thiếu `module_code` trả 400. Lý do: trạng thái thuộc về phân hệ, không có nghĩa khi đứng một mình.
-- `module_status=UNASSIGNED` là giá trị đặc biệt, lọc các việc chưa giao trong phân hệ đó.
+- Trạng thái riêng của phân hệ (`module_status=VERIFIED`…) **chỉ hợp lệ khi có `module_code`** là một phân hệ cụ thể; gửi thiếu `module_code` trả 400. Lý do: trạng thái thuộc về phân hệ, không có nghĩa khi đứng một mình.
+- `module_status=UNASSIGNED` là giá trị đặc biệt: lọc việc hiện không có cán bộ nào giữ (không còn assignment người dùng hiệu lực). Dùng được **có hoặc không có `module_code`**: không gửi `module_code` là mọi phân hệ kể cả việc chưa phân loại; gửi `module_code` thì giới hạn trong phân hệ đó (hoặc `UNCLASSIFIED`). Việc đã gộp trùng cũng không có người giữ nên nằm trong kết quả; FE nhận biết qua `is_duplicate`.
+- `module_status=ASSIGNED` là giá trị đặc biệt ngược lại: việc đang có ít nhất một cán bộ giữ, gồm cả việc đã hoàn thành hoặc bị phân hệ từ chối (assignment không kết thúc khi xong việc). Quy tắc `module_code` giống `UNASSIGNED`. Việc gộp trùng không bao giờ nằm ở đây vì assignment của nó đã kết thúc khi xác nhận trùng.
 - `is_rejected` đúng cho cả hai chiều: việc bị từ chối tại lõi trước khi giao (`rejection_reason` khác `null` và chưa có `module_record_id`), và việc bị phân hệ từ chối sau khi giao (adapter báo qua `getStatusMetadata`).
 - `scope=MINE` chỉ lấy việc có assignment người dùng hiện tại còn hiệu lực.
 - Mặc định danh sách ẩn bia mộ; muốn xem thì gửi tham số riêng.
@@ -318,6 +320,8 @@ Khi phân hệ cập nhật nghiệp vụ thành công, nó gọi `WorkItemModul
 Màn **Danh sách công việc** gồm một danh sách, bộ lọc phân hệ, bộ lọc trạng thái theo phân hệ, tìm kiếm, phân loại, xử lý nghi trùng và giao việc.
 
 - Tab **Tất cả công việc** gửi `scope=ALL`; tab **Việc của tôi** gửi `scope=MINE`.
+- Tab **Chưa giao** gửi `module_status=UNASSIGNED`, không cần chọn phân hệ; số trên tab (và badge sidebar) lấy từ `total` của đúng request này với `limit=1`. Trong tab này ẩn bộ lọc trạng thái.
+- Tab **Đã giao** gửi `module_status=ASSIGNED`, cũng không cần chọn phân hệ. Khi người dùng chọn thêm phân hệ và một trạng thái của phân hệ đó, FE gửi trạng thái ấy thay cho `ASSIGNED` (một request chỉ có một `module_status`); trạng thái phân hệ vốn chỉ có khi đã giao.
 - Bộ lọc trạng thái **bị vô hiệu hóa** khi chưa chọn phân hệ. Khi chọn một phân hệ, FE gọi `GET /work-items/module-statuses` để đổ option.
 - Việc chưa giao: cho phép xử lý trùng, phân loại và giao việc.
 - Việc đã giao: hành động chính là mở màn hình phân hệ.

@@ -1,257 +1,430 @@
-# TÀI LIỆU THIẾT KẾ KỸ THUẬT CHI TIẾT
+# TÀI LIỆU THIẾT KẾ KỸ THUẬT
 
-# PHÂN HỆ: QUẢN LÝ NGẬP ÚNG (FLOOD MANAGEMENT)
+# PHÂN HỆ QUẢN LÝ NGẬP ÚNG — XỬ LÝ SỰ VỤ NGẬP
 
-> Phạm vi: Tiếp nhận sự kiện ngập từ Camera AI → Cán bộ nhận việc → Xử lý hiện trường → Báo cáo kết quả → Quản trị duyệt hoàn thành.
->
-> **Các quyết định thiết kế nền tảng:**
->
-> 1. **Không thiết kế bảng `cameras`**. Camera là dữ liệu của hệ thống AI Box/CMS bên ngoài; phân hệ ngập úng chỉ lưu **mã tham chiếu** (`camera_id` dạng `cam_xxx`) và **snapshot** thông tin hiển thị lấy từ payload.
-> 2. **Điểm ngập chính là vị trí camera**. Không có danh mục điểm ngập riêng — mỗi camera giám sát ngập tương đương một điểm ngập, tọa độ lấy từ `camera.lat` / `camera.lng` trong payload.
-> 3. **Toàn bộ khóa chính dùng `UUID`** (`gen_random_uuid()`). Đây là **sai lệch có chủ ý** so với `BaseEntity` của repo (auto-increment integer) — xem mục 6.4.
-> 4. **Một mã nghiệp vụ duy nhất** `FLD-MM-YYYY-NNNNNN` cho toàn vòng đời sự kiện.
-> 5. Cấu trúc dữ liệu tiếp nhận bám sát **tài liệu API giai đoạn 1** (`giai-doan-1/Tai_lieu_mo_ta_API_full.md`).
+### Phường Phố Hiến — Giai đoạn 2
+
+**Phân hệ này làm gì:** nhận các sự vụ ngập đã được cán bộ điều phối phân loại và giao việc ở màn **Công việc**, rồi quản lý phần xử lý: cán bộ hiện trường tiếp nhận, xử lý, báo cáo kèm ảnh; quản lý duyệt và đóng. Điểm ngập đang xử lý hiện trên bản đồ hiện trường cho tới khi xong. Người dân đã phản ánh xem được kết quả trong lịch sử phản ánh.
+
+## Lịch sử thay đổi
+
+| Ngày       | Phiên bản | Nội dung                                                                                                                                                                                                                                                                                                                        |
+| ---------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-08    | v1        | Camera AI đẩy cảnh báo thẳng vào Ngập úng; tự gộp theo camera; cán bộ trực xác minh, giao việc và gộp/tách ngay trên màn Ngập úng.                                                                                                                                                                                              |
+| 2026-09-17 | v2        | **Tích hợp Công việc.** Mọi nguồn (camera, người dân, cán bộ tuần tra) vào Công việc; gộp trùng, phân loại, giao việc làm ở Công việc. Hồ sơ Ngập úng chỉ được tạo khi giao việc. Gỡ ingest tạo sự kiện, tự gộp theo camera, ngưỡng độ tin cậy, API `assign`/`merge`/`unmerge`. Lịch sử phản ánh của người dân đọc mọi phân hệ. |
 
 ---
 
 ## MỤC LỤC
 
-1. [Ví dụ minh họa thực tế ngoài đời thực (Real-world Simulations)](#1-ví-dụ-minh-họa-thực-tế-ngoài-đời-thực-real-world-simulations)
-2. [Nghiệp vụ hệ thống & Mô hình trạng thái (Business Flow & State Machine)](#2-nghiệp-vụ-hệ-thống--mô-hình-trạng-thái-business-flow--state-machine)
-3. [Thiết kế Cơ sở dữ liệu (Database Schema & Entity Relationship)](#3-thiết-kế-cơ-sở-dữ-liệu-database-schema--entity-relationship)
-4. [Thuật toán & Cơ chế kỹ thuật đặc thù (Specialized Mechanisms & Algorithms)](#4-thuật-toán--cơ-chế-kỹ-thuật-đặc-thù-specialized-mechanisms--algorithms)
-5. [Danh mục Thiết kế RESTful API Contracts](#5-danh-mục-thiết-kế-restful-api-contracts)
-6. [Chuẩn triển khai trong repo backend](#6-chuẩn-triển-khai-trong-repo-backend)
+1. [Nghiệp vụ](#1-nghiệp-vụ)
+2. [Trạng thái & quy tắc](#2-trạng-thái--quy-tắc)
+3. [Hướng dẫn FE](#3-hướng-dẫn-fe)
+4. [Danh mục API](#4-danh-mục-api)
+5. [Cơ sở dữ liệu](#5-cơ-sở-dữ-liệu)
+6. [Các cơ chế đặc thù](#6-các-cơ-chế-đặc-thù)
+7. [Chuẩn triển khai trong repo backend](#7-chuẩn-triển-khai-trong-repo-backend)
 
 ---
 
-## 1. VÍ DỤ MINH HỌA THỰC TẾ NGOÀI ĐỜI THỰC (REAL-WORLD SIMULATIONS)
+## 1. NGHIỆP VỤ
 
-### 1.1. Luồng chuẩn mực (Happy Case) — Ngập ngã tư Bà Triệu sau cơn mưa lớn
+### 1.1. Luồng tổng thể
 
-#### 👥 Các nhân vật tham gia:
+```
+Người dân (Zalo Mini App) ─┐
+Cán bộ tuần tra ───────────┼─► CÔNG VIỆC ─► gộp trùng ─► phân loại "Ngập úng" + mức ngập ─► giao 1 cán bộ
+Camera AI ─────────────────┘                                                                     │
+                                                                                                 ▼
+          NGẬP ÚNG: Chờ xử lý ─► Đang xử lý ─► Đã xử lý · chờ duyệt ─► quản lý duyệt ─► Hoàn thành
+                                                                                                 │
+          Lịch sử phản ánh (nhúng trong Zalo Mini App) ◄── người dân thấy kết quả ◄──────────────┘
+```
 
-- **Camera `cam_h28xUnSIzHY3TrF6tmsGo` (Cam 009)**: Camera AI giám sát nút giao Bà Triệu — **đồng thời là điểm ngập** trong hệ thống.
-- **Anh Nguyễn Văn An**: Quản trị hệ thống / Cán bộ trực điều hành (người trực hàng đợi sự kiện ngập).
-- **Anh Nguyễn Thành Trung**: Phó Trưởng phòng — Phòng Văn hóa & Dịch vụ Tổng hợp (cán bộ nhận việc xử lý).
-- **Công ty Môi trường Phố Hiến**: Đơn vị phối hợp mang xe bơm ra hiện trường.
+### 1.2. Các quyết định nghiệp vụ
 
----
+- **Công việc là cổng vào duy nhất.** Camera, người dân, cán bộ tuần tra đều tạo công việc. Camera **không** tự gắn phân hệ: cán bộ điều phối phân loại từng công việc. Không lọc cảnh báo camera theo độ tin cậy.
+- **Gộp trùng chỉ làm ở Công việc.** Cảnh báo lặp của cùng một camera tự dồn vào một công việc; trùng giữa các nguồn khác nhau do cán bộ xác nhận. Màn chi tiết Ngập úng vẫn xem được mọi nguồn phản ánh và các công việc đã gộp.
+- **Một lĩnh vực, một người chịu trách nhiệm.** Ngập úng chỉ có lĩnh vực `NGAP_UNG`; mỗi sự vụ giao đúng một cán bộ.
+- **Mức ngập chọn lúc phân loại.** `LOW` / `MID` / `HIGH` quyết định hạn xử lý.
+- **Một mã hồ sơ `FLD-MM-YYYY-NNNNNN`** cấp khi giao việc lần đầu, không đổi suốt vòng đời. Người dân chỉ biết mã công việc `PAHT.YYYYMMDD.NNNN`.
+- **Điểm ngập chưa có người tiếp nhận không lên bản đồ.** Bản đồ chỉ hiện điểm đang được xử lý.
+- **Không gửi thông báo đẩy cho người dân.** Người dân xem kết quả trong lịch sử phản ánh; lý do từ chối chỉ hiện khi cán bộ chọn thông báo.
+
+### 1.3. Một ngày làm việc bình thường
+
+Nhân vật: **chị Lan** — điều phối ở màn Công việc. **Anh Trung** — cán bộ xử lý hiện trường. **Anh An** — quản lý Ngập úng.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant CAM as Camera cam_h28x... (Cam 009)
-    participant AI as AI Box (Flood Detector)
-    participant BE as Backend System
-    actor Truc as Anh An (Cán bộ trực / Quản trị)
-    actor CanBo as Anh Trung (Phòng VH-DVTH)
-    participant DV as Công ty Môi trường
-    participant MAP as Bản đồ hiện trường (nội bộ)
+    participant Cam as Camera AI (Cam 009)
+    actor Dan as Bác Khoa (người dân)
+    participant WI as Công việc
+    actor Lan as Chị Lan (điều phối)
+    participant FL as Ngập úng
+    actor Trung as Anh Trung (xử lý)
+    actor An as Anh An (quản lý)
 
-    CAM->>AI: Luồng video RTSP liên tục
-    AI->>AI: Model phát hiện vùng ngập trong ROI đã cấu hình
-    AI->>BE: POST /api/v1/flood-events/ingest (payload chuẩn giai đoạn 1)
-    BE->>BE: Sinh mã FLD-08-2026-000123, dò trùng theo camera đang có sự kiện mở
-    par Lên bản đồ ngay & Báo cán bộ trực
-        BE->>MAP: Ghim điểm ngập "Chưa xác minh" (nét đứt)
-        BE->>Truc: Bắn thông báo real-time, đẩy vào tab "Chờ xử lý (+1)"
-    end
-
-    Truc->>BE: Mở sự kiện, xem ảnh detected_objects
-    Truc->>BE: Bấm "Nhận việc": chọn mức ngập, cán bộ xử lý, gộp sự kiện trùng
-    BE->>BE: Chuyển trạng thái VERIFIED
-    par Đổi trạng thái ghim & Giao việc
-        BE->>MAP: Ghim chuyển sang màu theo mức ngập (đã xác minh)
-        BE->>CanBo: Thông báo "Bạn được giao xử lý sự kiện FLD-08-2026-000123"
-    end
-
-    CanBo->>DV: Phối hợp đơn vị môi trường xử lý hiện trường
-    CanBo->>BE: Bấm "Báo cáo đã xử lý xong" + ảnh sau xử lý
-    BE->>Truc: Thông báo có kết quả chờ duyệt (tab "Đã xử lý · chờ duyệt")
-
-    Truc->>BE: Đối chiếu ảnh Trước/Sau, bấm "Xác nhận hoàn thành"
-    BE->>MAP: Gỡ ghim khỏi bản đồ, đóng sự kiện
+    Cam->>WI: 08:41 — cảnh báo ngập → mở PAHT.20260917.0012 (chưa phân loại)
+    Cam->>WI: 08:46, 08:51 — cảnh báo lặp → dồn vào cùng công việc (3 nguồn)
+    Dan->>WI: 08:50 — phản ánh qua Zalo → PAHT.20260917.0013, gợi ý nghi trùng
+    Lan->>WI: 08:55 — xác nhận trùng: nguồn của 0013 chuyển sang 0012
+    Lan->>WI: 08:57 — phân loại Ngập úng, mức HIGH, giao anh Trung
+    WI->>FL: Tạo FLD-09-2026-000123 (PENDING, có người nhận, chưa lên bản đồ)
+    FL->>Trung: "Bạn được giao xử lý FLD-09-2026-000123"
+    Trung->>FL: 09:05 — Tiếp nhận xử lý → VERIFIED, lên bản đồ
+    Trung->>FL: 10:20 — Báo cáo đã xử lý xong + 2 ảnh → SUBMITTED
+    An->>FL: 10:35 — Xác nhận hoàn thành → DONE, rời bản đồ
+    FL->>WI: Đồng bộ trạng thái, công việc đóng
+    Dan->>WI: Mở lịch sử phản ánh → "Đã xử lý xong" + ảnh sau xử lý
 ```
 
----
+### 1.4. Các tình huống thực tế
 
-#### ⏱️ Diễn biến chi tiết từng bước:
+**(1) Mưa kéo dài, camera bắn liên tục.** Công việc đang mở của camera nhận thêm nguồn thay vì mở công việc mới. Nếu đã có hồ sơ Ngập úng, hồ sơ được **làm giàu**: `alert_count` tăng, `last_detected_at` cập nhật, ảnh mới nối vào `detection_photos` (giữ 10 ảnh gần nhất). Khi hồ sơ kết thúc (`DONE`, `REJECTED`, `MERGED`), cảnh báo tiếp theo của camera mở một công việc mới.
 
-- **08:41:00 — Camera AI phát hiện ngập**:
-  Camera `cam_h28xUnSIzHY3TrF6tmsGo` (Cam 009) tại ngã tư Bà Triệu ghi nhận vùng nước ngập nằm trong ROI đã cấu hình. AI Box đóng gói payload gồm `camera`, `detected_objects` (đối tượng `flood` kèm `bounding_box` và `media_identifier` trỏ tới ảnh trên S3), `arr_roi_info`, `overall_confidence = 0.91`, `task_type = flood_detection`, gọi API `ingest` về Backend.
-- **08:41:02 — Hệ thống tiếp nhận sự kiện**:
-  1. Backend kiểm tra `event_id` của AI đã tồn tại chưa (chống trùng khi AI Box retry) → chưa có, tạo bản ghi mới với `id` dạng UUID.
-  2. Cấp mã nghiệp vụ `FLD-08-2026-000123` (theo tháng/năm tiếp nhận).
-  3. Snapshot thông tin camera (`id`, `name`, `address`, `lat`, `lng`, `group`) vào sự kiện — **đây chính là điểm ngập**, không cần tra cứu danh mục nào khác.
-  4. Thuật toán dò trùng kiểm tra camera này có sự kiện nào đang mở (`PENDING`/`VERIFIED`) không → không có.
-  5. Trạng thái khởi tạo `PENDING`. **Điểm ngập được ghim lên bản đồ hiện trường ngay lập tức** với marker "Chưa xác minh" (nét đứt, màu xám) — không chờ cán bộ nhận việc.
-  6. Phát sự kiện `FloodEventDetectedEvent` → chuông thông báo của Anh An nhảy `(+1)`, sidebar "Ngập úng" hiển thị badge số sự kiện chờ.
-- **08:44:00 — Cán bộ trực xác minh nhanh**:
-  - Anh An mở hàng đợi tab **"Chờ xử lý"**, thấy dòng `FLD-08-2026-000123 · Cam 009 · Ngã tư Bà Triệu · chờ 3 phút · 2 ảnh`.
-  - Xem 2 ảnh AI đã cắt kèm khung `bounding_box` để xác nhận đúng là ngập thật. _(Chức năng xem camera trực tiếp sẽ bổ sung ở giai đoạn sau.)_
-- **08:45:00 — Nhận việc & Giao xử lý**:
-  - Bấm **[Nhận việc xử lý]**, form hiện ra:
-    - **Phân loại mức ngập**: `Ngập nặng`.
-    - **Điểm ngập**: hiển thị sẵn `Cam 009 — Ngã tư Bà Triệu` (không cần chọn, lấy từ camera).
-    - **Cán bộ nhận việc**: `Nguyễn Thành Trung - Phó Trưởng phòng - Phòng Văn hóa & Dịch vụ Tổng hợp`.
-    - **Trùng sự kiện**: hệ thống gợi ý sự kiện đang mở của cùng camera (chọn tối đa một sự kiện để gộp).
-    - **Phát cảnh báo khẩn**: bật `ON` (mưa lớn, nút giao đông xe).
-  - Bấm **[Nhận việc & phát cảnh báo khẩn]**.
-  - Backend: chuyển trạng thái `PENDING → VERIFIED`; marker trên bản đồ **chuyển từ "Chưa xác minh" sang màu theo mức ngập**, đồng thời gửi cảnh báo khẩn tới cán bộ trực & lãnh đạo.
-  - Timeline ghi 1 mốc: _"Đã nhận việc"_ (`PENDING → VERIFIED`).
-- **09:05:00 — Phối hợp xử lý hiện trường**:
-  - Anh Trung phối hợp với `Công ty Môi trường Phố Hiến` bơm cưỡng bức tại hiện trường.
-- **10:20:00 — Báo cáo kết quả**:
-  - Anh Trung bấm **[Báo cáo đã xử lý xong]**, nhập kết quả: _"Đã bơm cưỡng bức, mặt đường khô, thu dọn rào chắn"_, tải **2 ảnh sau xử lý**.
-  - Trạng thái `VERIFIED → SUBMITTED` (Đã xử lý · chờ duyệt). Thông báo bắn về Quản trị.
-- **10:35:00 — Quản trị duyệt & Đóng sự kiện**:
-  - Anh An mở tab **"Đã xử lý · chờ duyệt (1)"**, đối chiếu ảnh AI phát hiện và ảnh sau xử lý.
-  - Chọn **"Đạt — xác nhận hoàn thành"**, ghi chú _"Kiểm tra ảnh hiện trường đạt yêu cầu"_.
-  - Trạng thái `SUBMITTED → DONE`, hệ thống **gỡ ghim khỏi bản đồ**, dừng đồng hồ, ghi nhận tổng thời gian xử lý `1 giờ 54 phút`.
+**(2) Cảnh báo sai.** Chưa giao thì cán bộ điều phối từ chối ở màn Công việc. Đã giao mà chưa ai tiếp nhận thì quản lý bấm **[Không hợp lệ]** ở Ngập úng, lý do bắt buộc, tùy chọn _Thông báo cho người phản ánh_.
+
+**(3) Cán bộ được giao không đi được.** Trên hồ sơ `PENDING` anh Trung có ba lựa chọn:
+
+- **[Tiếp nhận xử lý]** → `VERIFIED`, lên bản đồ, người điều phối nhận thông báo.
+- **[Từ chối nhận việc]** kèm lý do → hồ sơ về `PENDING` không người giữ; màn Công việc hiện **Chưa giao** để chị Lan giao lại người khác.
+- **[Chuyển xử lý]** cho đồng nghiệp kèm lý do → đổi người giữ, vẫn `PENDING`; người mới và người điều phối đều nhận thông báo.
+
+Đã tiếp nhận thì không từ chối hay chuyển được nữa, và màn Công việc cũng không giao đè được.
+
+**(4) Quản lý duyệt "Chưa đạt".** **[Chuyển lại xử lý]** kèm lý do → `SUBMITTED → VERIFIED`, xóa `submit_note` cũ, vẫn trên bản đồ.
+
+**(5) Hai hồ sơ Ngập úng hóa ra là một.** Cán bộ điều phối xác nhận trùng ở Công việc. Hồ sơ phụ chuyển `MERGED`, bỏ người giữ, nguồn và ảnh dồn về hồ sơ gốc. Tách trùng ở Công việc đưa hồ sơ phụ về `PENDING` chờ giao lại.
 
 ---
 
-### 1.2. Các tình huống thực tế đặc thù (Edge Cases)
+## 2. TRẠNG THÁI & QUY TẮC
 
-#### Case 2: Một camera bắn liên tiếp nhiều cảnh báo cho cùng đợt ngập (Gộp trùng)
-
-- **Tình huống**: Camera `cam_01kz5yvxcszc25jn13qbyrv17t` bắn cảnh báo lúc 08:14, 08:16, 08:18 và 08:20 trong cùng đợt mưa tại cổng chợ Phố Hiến.
-- **Xử lý Backend**: Vì camera đã có sự kiện `PENDING` đang mở, 3 cảnh báo sau **tự động gộp** vào sự kiện đầu tiên (`status = MERGED`), ghi bản ghi `flood_event_duplicates`. Sự kiện chính cập nhật `alert_count = 4`, `last_detected_at = 08:20`, nối ảnh mới vào `detection_photos` — hàng đợi hiện badge _"Đang tiếp diễn · 4 cảnh báo"_ để cán bộ thấy đợt ngập đang kéo dài chứ không đứng yên.
-- **Giao diện**: Cán bộ cũng có thể gộp thủ công — chọn một sự kiện trong hàng đợi rồi bấm **[Gộp vào sự kiện khác]** và chỉ định sự kiện chính. Mỗi thao tác gộp **một** sự kiện; muốn gộp nhiều thì lặp lại thao tác.
-
-#### Case 3: Cảnh báo sai do bóng cây / vệt nước nhỏ (Không hợp lệ)
-
-- **Tình huống**: Camera bắn cảnh báo với `overall_confidence = 0.66`, thực tế là bóng cây che ống kính.
-- **Xử lý Backend**: Cán bộ bấm **[Không hợp lệ]**, nhập lý do bắt buộc: _"Cảnh báo sai do bóng cây che ống kính"_ → trạng thái `REJECTED`, marker "Chưa xác minh" tự động biến mất khỏi bản đồ.
-- **Giá trị dữ liệu**: Toàn bộ sự kiện `REJECTED` kèm lý do, `model_id` và `overall_confidence` được tổng hợp làm **tập dữ liệu phản hồi** để đội AI tinh chỉnh ngưỡng model và ROI theo từng camera.
-
-#### Case 4: Quản trị duyệt "Chưa đạt" — trả lại xử lý
-
-- **Tình huống**: Cán bộ báo hoàn thành nhưng ảnh vẫn còn đọng nước tại vỉa hè.
-- **Xử lý Backend**: Quản trị chọn **"Chưa đạt — chuyển lại xử lý"**, nhập lý do bắt buộc → trạng thái `SUBMITTED → VERIFIED`, xóa `submit_note` cũ, ghi mốc timeline _"Quản trị chuyển lại xử lý"_, sự kiện **vẫn hiển thị trên bản đồ** (vì quay lại `VERIFIED`).
-
-#### Case 5: Tách sự kiện khỏi nhóm gộp (Unmerge)
-
-- **Tình huống**: Sau khi ra hiện trường, xác định cảnh báo lúc 08:16 là đợt ngập độc lập ở làn đường đối diện, cần xử lý riêng.
-- **Xử lý Backend**: Bấm **[Tách khỏi sự kiện chính]** → sự kiện con quay lại trạng thái `PENDING`, xóa liên kết `merged_into_event_id`, cập nhật lại `merged_count` của sự kiện cha, ghi log audit.
-
----
-
-## 2. NGHIỆP VỤ HỆ THỐNG & MÔ HÌNH TRẠNG THÁI (BUSINESS FLOW & STATE MACHINE)
-
-### 2.1. Sơ đồ luồng tổng quan (Core Flow Diagram)
+### 2.1. Mô hình trạng thái
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: Camera AI bắn sự kiện
+    [*] --> PENDING: Giao việc ở Công việc (lần đầu tạo hồ sơ)
 
-    PENDING --> REJECTED: Đánh dấu "Không hợp lệ" (bắt buộc lý do)
-    PENDING --> MERGED: Gộp vào sự kiện chính (auto / thủ công)
-    PENDING --> VERIFIED: "Nhận việc" — gán mức ngập, cán bộ xử lý
+    PENDING --> PENDING: Giao lại ở Công việc (chỉ khi chưa tiếp nhận)
+    PENDING --> PENDING: "Chuyển xử lý" (bắt buộc lý do)
+    PENDING --> PENDING: "Từ chối nhận việc" (bỏ người giữ, bắt buộc lý do)
+    PENDING --> VERIFIED: "Tiếp nhận xử lý" (lên bản đồ)
+    PENDING --> REJECTED: "Không hợp lệ" (bắt buộc lý do)
+    PENDING --> MERGED: Xác nhận trùng ở Công việc
+    VERIFIED --> MERGED: Xác nhận trùng ở Công việc
+    SUBMITTED --> MERGED: Xác nhận trùng ở Công việc
 
-    VERIFIED --> SUBMITTED: Cán bộ "Báo cáo đã xử lý xong" (+ ảnh sau xử lý)
+    VERIFIED --> SUBMITTED: "Báo cáo đã xử lý xong" (+ ảnh)
+    SUBMITTED --> VERIFIED: "Chưa đạt — chuyển lại xử lý"
+    SUBMITTED --> DONE: "Xác nhận hoàn thành"
 
-    SUBMITTED --> VERIFIED: Quản trị "Chưa đạt — chuyển lại xử lý"
-    SUBMITTED --> DONE: Quản trị "Đạt — xác nhận hoàn thành"
-
-    MERGED --> PENDING: Tách khỏi sự kiện chính (Unmerge)
+    MERGED --> PENDING: Tách trùng ở Công việc
 
     DONE --> [*]
     REJECTED --> [*]
 ```
 
-**Ánh xạ Tab giao diện ↔ Trạng thái:**
+`DONE`, `REJECTED`, `MERGED` là trạng thái kết thúc.
 
-| Tab hàng đợi         | Trạng thái  | Ý nghĩa                                     |
-| :------------------- | :---------- | :------------------------------------------ |
-| Chờ xử lý            | `PENDING`   | Sự kiện mới từ camera, chưa ai nhận việc    |
-| Đang xử lý           | `VERIFIED`  | Đã nhận việc, đang xử lý hiện trường        |
-| Đã xử lý · chờ duyệt | `SUBMITTED` | Cán bộ báo xong, chờ quản trị kiểm tra      |
-| Hoàn thành           | `DONE`      | Quản trị đã xác nhận, đóng sự kiện          |
-| Sự kiện trùng        | `MERGED`    | Đã gộp vào sự kiện chính                    |
-| Không hợp lệ         | `REJECTED`  | Cảnh báo sai / không đạt tiêu chí điểm ngập |
+| Tab hàng đợi         | `tab`       | Trạng thái   | Trên bản đồ                                                     |
+| :------------------- | :---------- | :----------- | :-------------------------------------------------------------- |
+| Chờ xử lý            | `pending`   | `PENDING`    | Không — kể cả đã giao mà chưa tiếp nhận                         |
+| Sắp đến hạn          | `soon`      | Mọi hồ sơ mở | Theo trạng thái của từng hồ sơ                                  |
+| Đang xử lý           | `verified`  | `VERIFIED`   | Ghim đặc, màu theo mức ngập: vàng `LOW` / cam `MID` / đỏ `HIGH` |
+| Đã xử lý · chờ duyệt | `submitted` | `SUBMITTED`  | Ghim đặc + badge "Chờ duyệt"                                    |
+| Hoàn thành           | `done`      | `DONE`       | Không                                                           |
+| Sự kiện trùng        | `merged`    | `MERGED`     | Không                                                           |
+| Không hợp lệ         | `rejected`  | `REJECTED`   | Không                                                           |
+
+Hồ sơ `PENDING` có ba dạng, FE phân biệt bằng `assigned_user_snapshot` và `decline_reason`:
+
+| `assigned_user_snapshot` | `decline_reason` | Hiển thị                                    |
+| :----------------------- | :--------------- | :------------------------------------------ |
+| Có tên                   | `null`           | _Đã giao · chờ tiếp nhận_                   |
+| `null`                   | Có lý do         | _Bị từ chối · chờ giao lại ở Công việc_     |
+| `null`                   | `null`           | _Chờ giao lại ở Công việc_ (sau tách trùng) |
+
+### 2.2. Bảng chuyển trạng thái & điều kiện
+
+| Từ                               | Hành động (`action_name`) | Sang        | Ở đâu / ai làm                             | Điều kiện                                                                                                                                               |
+| :------------------------------- | :------------------------ | :---------- | :----------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| —                                | `INGEST_EVENT`            | `PENDING`   | Công việc — giao việc lần đầu              | Công việc đã phân loại `FLOOD_EVENTS` / `NGAP_UNG`, có `flood_level`, giao đúng 1 cán bộ                                                                |
+| `PENDING`                        | `ASSIGN_EVENT`            | `PENDING`   | Công việc — giao việc / giao lại           | Ghi người giữ, `assigned_by_user_id`, `assigned_at`, `sla_deadline` theo mức ngập; xóa `decline_reason`. Đã `VERIFIED` trở đi → `409`                   |
+| `PENDING`                        | `ACCEPT_EVENT`            | `VERIFIED`  | Ngập úng — cán bộ được giao                | `409` nếu chưa giao ai; `403` nếu không phải người được giao                                                                                            |
+| `PENDING`                        | `DECLINE_EVENT`           | `PENDING`   | Ngập úng hoặc Công việc — cán bộ được giao | Lý do bắt buộc; bỏ người giữ, giữ `flood_level`, ghi `decline_reason`                                                                                   |
+| `PENDING`                        | `TRANSFER_EVENT`          | `PENDING`   | Ngập úng — cán bộ được giao                | Lý do ≥ 10 ký tự; người nhận phải tồn tại (`404`) và thuộc một phòng ban (`409`); không chuyển cho chính mình (`409`); giữ nguyên `assigned_by_user_id` |
+| `PENDING`                        | `REJECT_EVENT`            | `REJECTED`  | Ngập úng — quản lý                         | Lý do ≥ 10 ký tự; `notify_reporter` tùy chọn                                                                                                            |
+| `PENDING`/`VERIFIED`/`SUBMITTED` | `MERGE_EVENT`             | `MERGED`    | Công việc — xác nhận trùng                 | Cả hai công việc đã có hồ sơ Ngập úng; không gộp lồng                                                                                                   |
+| `MERGED`                         | `UNMERGE_EVENT`           | `PENDING`   | Công việc — tách trùng                     | Hồ sơ gốc còn tồn tại                                                                                                                                   |
+| `VERIFIED`                       | `SUBMIT_RESULT`           | `SUBMITTED` | Ngập úng — cán bộ được giao                | `submit_note` và ≥ 1 ảnh sau xử lý; `403` nếu không phải người được giao                                                                                |
+| `SUBMITTED`                      | `APPROVE_RESULT`          | `DONE`      | Ngập úng — quản lý                         | Đóng hồ sơ, đóng công việc                                                                                                                              |
+| `SUBMITTED`                      | `RETURN_RESULT`           | `VERIFIED`  | Ngập úng — quản lý                         | `return_note` ≥ 10 ký tự                                                                                                                                |
+
+Mọi chuyển trạng thái không có trong bảng trả `409`.
+
+### 2.3. Phân quyền
+
+Các route Ngập úng hiện chỉ yêu cầu đăng nhập, chưa kiểm tra action role. Realm mới đặt chỗ `flood.point.manage` và composite `flood-manager`. Hai quy tắc được kiểm tra trong service: **chỉ cán bộ đang được giao mới tiếp nhận, từ chối, chuyển xử lý hoặc báo cáo kết quả**, và **chỉ cho phép chuyển trạng thái hợp lệ từ trạng thái hiện tại**.
 
 ---
 
-### 2.2. Bảng chuyển đổi trạng thái & Điều kiện bảo vệ (State Transitions & Guards)
+## 3. HƯỚNG DẪN FE
 
-| Trạng thái nguồn | Hành động (Action) | Trạng thái đích | Quyền thực hiện (`Role`)     | Điều kiện kiểm tra (Guards)                                                                                |
-| :--------------- | :----------------- | :-------------- | :--------------------------- | :--------------------------------------------------------------------------------------------------------- |
-| `[START]`        | `INGEST_EVENT`     | `PENDING`       | Service Account (AI Box)     | Payload có `camera.id`, `camera.lat/lng`, `event_id` chưa tồn tại, `overall_confidence ≥ ngưỡng cấu hình`. |
-| `PENDING`        | `ACCEPT_EVENT`     | `VERIFIED`      | Cán bộ trực / Quản trị       | Bắt buộc: `flood_level`, `assigned_user_id`. Điểm ngập lấy từ camera, không cần nhập.                      |
-| `PENDING`        | `REJECT_EVENT`     | `REJECTED`      | Cán bộ trực / Quản trị       | Bắt buộc `reject_reason` ≥ 10 ký tự.                                                                       |
-| `PENDING`        | `MERGE_EVENT`      | `MERGED`        | Cán bộ trực / Hệ thống       | `merged_into_event_id` phải tồn tại và **không** ở trạng thái `MERGED` (chống gộp lồng nhau).              |
-| `MERGED`         | `UNMERGE_EVENT`    | `PENDING`       | Cán bộ trực / Quản trị       | Sự kiện cha còn tồn tại; ghi lại người thao tác & thời điểm.                                               |
-| `VERIFIED`       | `SUBMIT_RESULT`    | `SUBMITTED`     | Cán bộ được giao             | Bắt buộc `submit_note` và **`after_photos` có ít nhất 1 ảnh**.                                             |
-| `SUBMITTED`      | `APPROVE_RESULT`   | `DONE`          | Quản trị hệ thống / Lãnh đạo | Đóng sự kiện, marker tự rời bản đồ (do đổi trạng thái), dừng đồng hồ xử lý.                                |
-| `SUBMITTED`      | `RETURN_RESULT`    | `VERIFIED`      | Quản trị hệ thống / Lãnh đạo | Bắt buộc `return_note`; điểm ngập vẫn nằm trên bản đồ.                                                     |
+### 3.1. Việc cần sửa ở màn Ngập úng
+
+| Hiện tại                                                         | Cần đổi                                                                                                                                                                |
+| :--------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Form **Xác minh & Giao việc** gọi `POST /flood-events/assign`    | **Gỡ.** Phân loại và giao việc làm ở màn Công việc (§3.2)                                                                                                              |
+| Nút **Gộp** / **Tách** gọi `POST /flood-events/merge`, `unmerge` | **Gỡ.** Xác nhận/tách trùng làm ở màn Công việc                                                                                                                        |
+| Chi tiết đọc `duplicates`                                        | Trường đã gỡ. Dùng `sources` (nguồn phản ánh) và `merged_work_items` (công việc đã gộp); hiện `work_item_code`                                                         |
+| Hiển thị sự kiện theo camera                                     | `camera_id`, `camera_name`, `camera_lat`, `camera_lng` có thể `null` (sự vụ từ người dân/cán bộ). Tiêu đề dùng `title`, vị trí dùng `address`, `latitude`, `longitude` |
+| Nút **Chuyển cho người khác**                                    | Đổi nhãn **Chuyển xử lý**. Bỏ ô chọn phòng ban: `assigned_department_snapshot` không còn dùng, BE lấy phòng ban của người nhận                                         |
+| Nút **Không hợp lệ**                                             | Thêm checkbox _Thông báo cho người phản ánh_ → `notify_reporter`                                                                                                       |
+| Nhãn hồ sơ `PENDING` chưa có người giữ                           | Hướng người dùng về màn Công việc để giao lại (§2.1)                                                                                                                   |
+| Bộ lọc camera                                                    | `GET /flood-events/cameras` chỉ trả camera thật; ô tìm kiếm `q` tìm cả tiêu đề và địa chỉ                                                                              |
+| Báo cáo theo camera                                              | Có thể có một dòng `camera_id = null` gom các sự vụ không đến từ camera                                                                                                |
+
+Các thao tác còn lại giữ nguyên: danh sách, thống kê, tiếp nhận, từ chối nhận việc, báo cáo kết quả, duyệt, chuyển lại, bản đồ.
+
+### 3.2. Màn Công việc — phần dành cho Ngập úng
+
+1. Danh sách: `GET /work-items?module_code=FLOOD_EVENTS`. Trạng thái lọc lấy từ `GET /work-items/module-statuses?module_code=FLOOD_EVENTS` (gồm `UNASSIGNED` + các trạng thái §2.1 kèm nhãn). Công việc đã có hồ sơ có `module_record_code = FLD-…` để mở màn Ngập úng.
+2. Dropdown nền tảng: `GET /work-items/modules`; lĩnh vực: `GET /work-items/categories?module_code=FLOOD_EVENTS` → chỉ `NGAP_UNG`.
+3. Phân loại — khi chọn Ngập úng, form **bắt buộc chọn mức ngập** và có tùy chọn cảnh báo khẩn:
+
+   ```json
+   POST /work-items/classify
+   {
+     "work_item_id": "…",
+     "module_code": "FLOOD_EVENTS",
+     "category_code": "NGAP_UNG",
+     "priority": "HIGH",
+     "module_payload": { "flood_level": "HIGH", "is_urgent_alert": false }
+   }
+   ```
+
+   Thiếu hoặc sai `flood_level` trả `409`, `message` nêu `module_payload.flood_level`.
+
+4. Giao việc — **chỉ cho chọn một cán bộ**, cán bộ phải thuộc một trong các phòng ban chọn:
+
+   ```json
+   POST /work-items/assign
+   {
+     "work_item_id": "…",
+     "department_ids": ["…"],
+     "assigned_user_ids": ["…"],
+     "note": "…"
+   }
+   ```
+
+   Nhiều hơn một cán bộ trả `409`. Hồ sơ đã được tiếp nhận thì giao lại trả `409`.
+
+5. Nghi trùng: `GET /work-items/duplicate-candidates`, `POST /work-items/duplicates/confirm|dismiss|unlink`.
+6. Từ chối trước khi giao: `POST /work-items/reject` `{ work_item_id, reason, notify_reporter }`.
+
+### 3.3. Lịch sử phản ánh của người dân
+
+`GET /work-items/citizen-reports/tracking?report_code=|phone=` và `GET /work-items/citizen-reports/mine?reporter_phone=&page=&limit=` (token đối tác). Hai API đọc trên Công việc nên thấy phản ánh ở mọi phân hệ. `status` là trạng thái dành cho người dân:
+
+| `status`      | `status_label` | Khi nào                                         | Hiện thêm         |
+| :------------ | :------------- | :---------------------------------------------- | :---------------- |
+| `RECEIVED`    | Đã tiếp nhận   | Chưa có ai giữ                                  | Ảnh người dân gửi |
+| `IN_PROGRESS` | Đang xử lý     | Đã giao, kể cả chờ duyệt hoặc bị trả lại        | Ảnh người dân gửi |
+| `COMPLETED`   | Đã xử lý xong  | Quản lý đã duyệt                                | Ảnh sau xử lý     |
+| `REJECTED`    | Bị từ chối     | Bị từ chối **và** cán bộ chọn `notify_reporter` | `reject_reason`   |
+| `CLOSED`      | Đã đóng        | Bị từ chối, cán bộ không chọn thông báo         | —                 |
+
+- Phản ánh đã gộp trùng theo trạng thái công việc gốc, kèm `merged_into_report_code`.
+- Tra theo số điện thoại lấy phản ánh qua app và hotline. `attachments` chỉ gồm ảnh do người dân gửi (`phase = BEFORE_PROCESSING`) và ảnh sau xử lý khi `COMPLETED` (`phase = AFTER_PROCESSING`); không trả ảnh camera hay ảnh cán bộ.
+- Giá trị `status` trước đây là trạng thái nội bộ của Dịch vụ đô thị số (`WAITING`, `PENDING_APPROVAL`…) — giao diện dựa vào giá trị cũ phải cập nhật.
+
+### 3.4. Khi sự vụ xử lý xong, "trả lời" nằm ở đâu
+
+**Không có màn hình hay bước "trả lời" riêng cho cán bộ.** Câu trả lời cho người dân được tạo tự động từ chính các thao tác xử lý ở màn Ngập úng:
+
+| Bước ở màn Ngập úng                               | Trở thành gì trong câu trả lời cho người dân                          |
+| :------------------------------------------------ | :-------------------------------------------------------------------- |
+| **Báo cáo đã xử lý xong**: `submit_note`          | **Không trả cho người dân** — ghi chú nội bộ, chỉ xem ở màn Ngập úng  |
+| **Báo cáo đã xử lý xong**: `after_photo_urls`     | `attachments` với `phase = AFTER_PROCESSING` — người dân xem được     |
+| **Xác nhận hoàn thành** (quản lý duyệt)           | Chỉ từ lúc này người dân mới thấy `COMPLETED` và ảnh sau xử lý        |
+| **Chuyển lại xử lý**                              | Người dân vẫn thấy `IN_PROGRESS`, chưa thấy ảnh sau xử lý             |
+| **Không hợp lệ** + _Thông báo cho người phản ánh_ | `REJECTED` + `reject_reason`; không tích thì `CLOSED`, không lộ lý do |
+
+Kết quả người dân nhận là **trạng thái "Đã xử lý xong" và ảnh sau xử lý**; nội dung cán bộ viết khi báo cáo không bao giờ được trả ra. Form **Báo cáo đã xử lý xong** nên ghi cho cán bộ: _"Ảnh sau xử lý sẽ hiển thị cho người dân sau khi được duyệt"_. Riêng lý do **Không hợp lệ** được trả nguyên văn khi cán bộ tích _Thông báo cho người phản ánh_, nên ô này cần nhắc cán bộ viết lời có thể gửi người dân.
+
+Ba màn hình và vai trò:
+
+| Màn hình                                         | Ai dùng               | Nội dung                                                                                                                                                                     | API                                                    |
+| :----------------------------------------------- | :-------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------- |
+| **Ngập úng** — chi tiết hồ sơ                    | Cán bộ xử lý, quản lý | Nhập và xem đầy đủ kết quả xử lý, ảnh trước/sau, duyệt, tiến độ, nguồn phản ánh, sự vụ đã gộp                                                                                | `GET /flood-events/detail`, các `POST /flood-events/*` |
+| **Công việc** — danh sách                        | Cán bộ điều phối      | Chỉ trạng thái rút gọn (`module_status_label`, hạn, đã đóng, lý do từ chối) và `module_record_code = FLD-…` để mở sang Ngập úng. Không có nội dung kết quả hay ảnh sau xử lý | `GET /work-items`                                      |
+| **Lịch sử phản ánh** — nhúng trong Zalo Mini App | Người dân             | **Màn hình trả lời:** trạng thái, ảnh trước/sau, lý do từ chối khi được thông báo (§3.3)                                                                                     | `GET /work-items/citizen-reports/tracking`, `/mine`    |
+
+Với sự vụ bị gộp trùng: chỉ hồ sơ Ngập úng của **công việc gốc** được xử lý. Mọi người đã phản ánh (kể cả ở công việc bị gộp) nhận **cùng một câu trả lời** của công việc gốc. Tra theo mã công việc bị gộp vẫn ra kết quả của công việc gốc, kèm `merged_into_report_code`.
+
+### 3.5. Xem các sự vụ đã gộp ở màn Ngập úng
+
+Màn chi tiết hồ sơ (`GET /flood-events/detail`) có đủ dữ liệu, FE cần thêm hai khối:
+
+**Khối "Nguồn phản ánh"** — `sources[]`, mỗi dòng là một lần báo: camera, người dân, cán bộ tuần tra.
+
+| Hiển thị          | Trường                                                                                    |
+| :---------------- | :---------------------------------------------------------------------------------------- |
+| Loại nguồn (icon) | `source_type`: `CAMERA` / `CITIZEN` / `HOTLINE` / `OFFICER` / `INTEGRATION`               |
+| Tên               | `camera_name` với camera; `reporter_name` với người báo (`null` = _Ẩn danh_)              |
+| Thời điểm         | `occurred_at`                                                                             |
+| Nhãn _"Gộp từ …"_ | `origin_work_item_code` khác `null` — nguồn này ban đầu thuộc một công việc đã bị gộp vào |
+
+**Khối "Sự vụ đã gộp"** — `merged_work_items[]`, mỗi dòng là một công việc đã xác nhận trùng vào sự vụ này: `work_item_code`, `title`, `first_reported_at`. Đếm số lượng bằng độ dài mảng này, **không dùng `merged_count`** (`merged_count` chỉ đếm hồ sơ Ngập úng đã gộp, bỏ sót công việc bị gộp trước khi được giao). Hiện chưa có API chi tiết một công việc, nên dòng này chỉ hiển thị, chưa mở được.
+
+Chiều ngược lại, khi mở một hồ sơ đã bị gộp (tab **Sự kiện trùng**, `status = MERGED`): hiện _"Đã gộp vào `merged_into_event_code`"_ và cho bấm mở hồ sơ gốc.
+
+Ở hàng đợi, badge số lượt báo dùng `alert_count`.
 
 ---
 
-### 2.3. Ma trận Phân quyền RBAC (Role-Based Access Control)
+## 4. DANH MỤC API
 
-Mapping chuẩn theo hệ thống Keycloak client `phohien-backend`:
+Prefix `/api/v1`. Response theo khuôn `src/base/response.type.ts`. Không dùng path param: `POST` truyền định danh trong body, `GET` qua query. Tên trường là `snake_case`.
 
-| Hành động nghiệp vụ                                       | Vai trò Keycloak (`Composite Role`) | Action Role được kiểm tra (`@RequireRole`) |
-| :-------------------------------------------------------- | :---------------------------------- | :----------------------------------------- |
-| AI Box đẩy sự kiện ngập vào hệ thống (**nguồn duy nhất**) | Service Account (`svc-ai-ingest`)   | `flood.event.ingest`                       |
-| Xem hàng đợi, bộ lọc, chi tiết sự kiện                    | Tất cả cán bộ                       | `flood.event.view` / `staff-base`          |
-| Nhận việc, phân mức ngập, giao cán bộ                     | Cán bộ trực / Quản trị hệ thống     | `flood.event.manage`                       |
-| Đánh dấu không hợp lệ                                     | Cán bộ trực / Quản trị hệ thống     | `flood.event.manage`                       |
-| Gộp / tách sự kiện trùng                                  | Cán bộ trực / Quản trị hệ thống     | `flood.event.manage`                       |
-| Báo cáo đã xử lý xong (+ ảnh sau xử lý)                   | Cán bộ được giao                    | `flood.case.process`                       |
-| Duyệt kết quả / Chuyển lại xử lý                          | Quản trị hệ thống / Lãnh đạo        | `flood.case.approve`                       |
+### 4.1. Tiếp nhận cảnh báo từ AI Box
+
+`POST /flood-events/ingest` giữ đường dẫn và body để AI Box không phải đổi cấu hình, nhưng route thuộc module `work-items` và **không tạo hồ sơ Ngập úng**:
+
+```json
+{
+  "camera": {
+    "id": "cam_h28xUnSIzHY3TrF6tmsGo",
+    "name": "Cam 009",
+    "address": "Ngã tư Bà Triệu",
+    "lat": 20.654312,
+    "lng": 106.052145,
+    "group_id": "cg_uzNWenG0PkaY5z89vANkW",
+    "group": { "id": "cg_uzNWenG0PkaY5z89vANkW", "name": "Cam W1" }
+  },
+  "detected_objects": [
+    {
+      "class_label": "flood",
+      "confidence_score": 0.91,
+      "media_identifier": "https://aibox-cm-events.s3.vn1.aiboxvision.com/image/20260806_084100_1.jpg",
+      "model_id": "ANS_Flood_v3 v1.0"
+    }
+  ],
+  "arr_roi_info": [{ "name": "Polygon 1", "roi_match": "Centre Point", "option": "Inside ROI" }],
+  "event_id": "6a72fe1e25c71dcf3db2cb4b",
+  "object_count": 1,
+  "overall_confidence": 0.91,
+  "processing_status": "completed",
+  "task_type": "flood_detection"
+}
+```
+
+| Tình huống                                                  | Mã    | Nội dung                                                |
+| :---------------------------------------------------------- | :---- | :------------------------------------------------------ |
+| Mở công việc mới, hoặc dồn vào công việc đang mở của camera | `201` | `WorkItemMutationDto`: `id`, `code`, `module_status`, … |
+| `event_id` đã nhận (kể cả qua `/work-items/camera-events`)  | `200` | Công việc đã có, không ghi thêm                         |
+| Thiếu `camera.id` hoặc body sai                             | `400` |                                                         |
+| Chưa đăng nhập                                              | `401` |                                                         |
+
+Không lọc `overall_confidence`; `task_type` bắt buộc có nhưng nhận mọi giá trị. Tọa độ ngoài phạm vi bị bỏ qua. `camera.username`, `camera.stream_url` không được lưu.
+
+### 4.2. API Ngập úng
+
+| Method | Endpoint                   | Body / Query                                                          | Mô tả                                                                                                                                                                                                                                |
+| :----- | :------------------------- | :-------------------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | `/flood-events`            | `page, limit, tab, q, camera_id, camera_group_id, from_date, to_date` | Hàng đợi theo tab (§2.1). `q` tìm mã, tên camera, tiêu đề, địa chỉ. `from_date`/`to_date` là ngày lịch, bao trọn hai ngày. Tab `soon` sắp theo hạn gần nhất; tab khác theo `last_detected_at DESC`                                   |
+| `GET`  | `/flood-events/stats`      | `from_date, to_date`                                                  | Đếm theo tab; `assigned` là phần của `pending` đã giao chưa tiếp nhận                                                                                                                                                                |
+| `GET`  | `/flood-events/cameras`    | —                                                                     | Camera đã phát sinh hồ sơ, cho bộ lọc                                                                                                                                                                                                |
+| `GET`  | `/flood-events/detail`     | `code`                                                                | Chi tiết §4.3                                                                                                                                                                                                                        |
+| `POST` | `/flood-events/accept`     | `{ event_code, note? }`                                               | Tiếp nhận xử lý                                                                                                                                                                                                                      |
+| `POST` | `/flood-events/decline`    | `{ event_code, reason }`                                              | Từ chối nhận việc, lý do ≥ 10 ký tự                                                                                                                                                                                                  |
+| `POST` | `/flood-events/transfer`   | `{ event_code, assigned_user_id, reason }`                            | Chuyển xử lý, lý do ≥ 10 ký tự. `assigned_department_snapshot` bị bỏ qua                                                                                                                                                             |
+| `POST` | `/flood-events/reject`     | `{ event_code, reason, notify_reporter? }`                            | Không hợp lệ, lý do ≥ 10 ký tự; `notify_reporter` mặc định `false`                                                                                                                                                                   |
+| `POST` | `/flood-events/submit`     | `{ event_code, submit_note, after_photo_urls[] }`                     | Báo cáo đã xử lý xong, ≥ 1 URL ảnh (upload qua module `uploads`)                                                                                                                                                                     |
+| `POST` | `/flood-events/approve`    | `{ event_code, approve_note? }`                                       | Xác nhận hoàn thành                                                                                                                                                                                                                  |
+| `POST` | `/flood-events/return`     | `{ event_code, return_note }`                                         | Chuyển lại xử lý, lý do ≥ 10 ký tự                                                                                                                                                                                                   |
+| `GET`  | `/flood-map/active-points` | —                                                                     | Điểm `VERIFIED`/`SUBMITTED`: một ghim mỗi camera (hồ sơ mới nhất), hồ sơ không camera là một ghim riêng, hồ sơ không có tọa độ bị bỏ. Trả `event_code, title, camera_id, camera_name, camera_address, lat, lng, status, flood_level` |
+| `GET`  | `/flood-reports/summary`   | `from_date, to_date, camera_id, camera_group_id`                      | Theo camera: tổng, số theo mức ngập, số không hợp lệ, `false_alarm_rate`. Một dòng `camera_id = null` gom sự vụ không có camera                                                                                                      |
+
+Các mutation trả `{ event_code, status, status_label, flood_level }`.
+
+**Đã gỡ:** `POST /flood-events/assign` → `POST /work-items/classify` + `POST /work-items/assign`; `POST /flood-events/merge` → `POST /work-items/duplicates/confirm`; `POST /flood-events/unmerge` → `POST /work-items/duplicates/unlink`.
+
+### 4.3. Chi tiết hồ sơ
+
+`GET /flood-events/detail?code=FLD-09-2026-000123`:
+
+| Nhóm                   | Trường                                                                                                                                                                                                                                                                                                                      |
+| :--------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Định danh              | `id` (= id công việc), `event_code`, `work_item_code`, `status`, `status_label`, `flood_level`                                                                                                                                                                                                                              |
+| Sự vụ                  | `title`, `description`, `address`, `latitude`, `longitude`                                                                                                                                                                                                                                                                  |
+| Camera (có thể `null`) | `camera_id`, `camera_name`, `camera_address`, `camera_lat`, `camera_lng`, `camera_group_id`, `camera_group_name`, `model_id`, `overall_confidence`                                                                                                                                                                          |
+| Ảnh                    | `detection_photos[] { url, captured_at }`, `after_photos[] { url, uploaded_by, uploaded_at }`                                                                                                                                                                                                                               |
+| Diễn biến              | `alert_count`, `merged_count`, `is_urgent_alert`, `merged_into_event_code`                                                                                                                                                                                                                                                  |
+| Giao việc              | `assigned_user_id`, `assigned_user_snapshot`, `assigned_department_snapshot`, `assigned_by_user_id`, `decline_reason`, `assigned_at`, `accepted_at`                                                                                                                                                                         |
+| Kết quả                | `submit_note`, `return_note`, `approve_note`, `reject_reason`, `submitted_at`, `approved_at`                                                                                                                                                                                                                                |
+| Hạn                    | `detected_at`, `intake_deadline`, `sla_deadline`, `deadline_type`, `deadline_status`, `overdue_minutes`                                                                                                                                                                                                                     |
+| Tiến độ                | `timeline[] { action_name, step_name, from_status, to_status, user_display_snapshot, department_name_snapshot, note, actual_time }`                                                                                                                                                                                         |
+| Nguồn phản ánh         | `sources[] { source_type, source_system, reporter_name, camera_id, camera_name, occurred_at, origin_work_item_code }` — `source_type`: `CAMERA`, `CITIZEN`, `OFFICER`, `HOTLINE`, `INTEGRATION`. Không trả số điện thoại; ẩn danh thì `reporter_name = null`; `origin_work_item_code` có giá trị khi nguồn đến từ gộp trùng |
+| Công việc đã gộp       | `merged_work_items[] { work_item_id, work_item_code, title, first_reported_at }`                                                                                                                                                                                                                                            |
+
+`detected_objects` và `roi_info` luôn `null` với hồ sơ tạo từ Công việc.
 
 ---
 
-## 3. THIẾT KẾ CƠ SỞ DỮ LIỆU (DATABASE SCHEMA & ENTITY RELATIONSHIP)
+## 5. CƠ SỞ DỮ LIỆU
 
-### 3.1. Sơ đồ quan hệ thực thể (ERD)
+**Ba bảng của phân hệ**: `flood_events`, `flood_event_timelines` (chỉ INSERT), `flood_event_duplicates` (liên kết gộp/tách). Nguồn phản ánh, ảnh gốc và lịch sử giao việc nằm ở các bảng `work_item_*` của lõi Công việc — xem `work_items_workflow_technical_design.md`.
+
+### 5.1. Sơ đồ quan hệ
 
 ```mermaid
 erDiagram
-    USERS ||--o{ FLOOD_EVENTS : "assigned_officer"
-    USERS ||--o{ FLOOD_EVENT_TIMELINES : "action_by"
-
+    WORK_ITEMS ||--o| FLOOD_EVENTS : "id = id"
+    USERS ||--o{ FLOOD_EVENTS : "assigned_user / assigned_by"
     FLOOD_EVENTS ||--o{ FLOOD_EVENT_TIMELINES : "has_history"
     FLOOD_EVENTS ||--o{ FLOOD_EVENT_DUPLICATES : "groups"
 
     FLOOD_EVENTS {
-        uuid id PK
+        uuid id PK "= work_items.id"
         text event_code UK "FLD-MM-YYYY-NNNNNN"
-        text ai_event_id UK "event_id từ AI Box — chống trùng"
-        text camera_id "cam_xxx — ĐIỂM NGẬP, không có bảng cameras"
+        varchar title "từ công việc"
+        text description
+        varchar address
+        numeric latitude
+        numeric longitude
+        text ai_event_id UK "nullable — event_id của camera nguồn chính"
+        text camera_id "nullable"
         text camera_name
         text camera_address
-        numeric camera_lat
-        numeric camera_lng
+        numeric camera_lat "nullable"
+        numeric camera_lng "nullable"
         text camera_group_id
         text camera_group_name
-        text task_name
-        text task_group
         text task_type
-        text processing_status "AI: pending/processing/completed/failed"
-        int object_count
         numeric overall_confidence
-        jsonb detected_objects "detected_objects[] nguyên bản"
-        jsonb detection_photos "Ảnh AI phát hiện (khử trùng URL)"
-        jsonb after_photos "Ảnh sau xử lý do cán bộ tải lên"
-        jsonb roi_info "arr_roi_info nguyên bản"
-        jsonb event_data "q_object_classes, q_license_plates"
-        text model_id "Tách từ detected_objects để lọc/thống kê"
+        text model_id
+        jsonb detection_photos "trần 10"
+        jsonb after_photos
         text status "PENDING, VERIFIED, SUBMITTED, DONE, MERGED, REJECTED"
         text flood_level "LOW, MID, HIGH"
-        text detect_note
+        int alert_count
         int merged_count
         uuid merged_into_event_id FK
-        int alert_count "Số cảnh báo AI đã dồn vào sự kiện"
-        timestamptz last_detected_at "Cảnh báo gần nhất"
+        timestamptz last_detected_at
         boolean is_urgent_alert
-        uuid assigned_user_id FK "users.id = Keycloak sub"
+        uuid assigned_user_id FK
         text assigned_user_snapshot
         text assigned_department_snapshot
+        uuid assigned_by_user_id FK
+        text decline_reason
         timestamptz detected_at
+        timestamptz intake_deadline
+        timestamptz sla_deadline
+        timestamptz assigned_at
         timestamptz accepted_at
         timestamptz submitted_at
         timestamptz approved_at
@@ -259,710 +432,151 @@ erDiagram
         text return_note
         text approve_note
         text reject_reason
-        int version
-        timestamptz created_at
-        timestamptz updated_at
-        timestamptz deleted_at
-    }
-
-    FLOOD_EVENT_TIMELINES {
-        uuid id PK
-        uuid event_id FK
-        text action_name
-        text step_name
-        text from_status
-        text to_status
-        uuid executed_by_user_id FK
-        text user_display_snapshot
-        text department_name_snapshot
-        text note
-        timestamptz actual_time
-        timestamptz created_at
-    }
-
-    FLOOD_EVENT_DUPLICATES {
-        uuid id PK
-        uuid master_event_id FK
-        uuid duplicate_event_id FK
-        text merge_type "AUTO, MANUAL"
-        uuid merged_by_user_id FK
-        text merged_by_snapshot
-        text note
-        timestamptz merged_at
-        timestamptz unmerged_at
-        uuid unmerged_by_user_id FK
     }
 ```
 
----
+`flood_event_timelines` và `flood_event_duplicates` giữ nguyên cấu trúc v1. Các cột `created_at` / `updated_at` / `deleted_at` có ở cả ba bảng.
 
-### 3.2. Ánh xạ payload AI giai đoạn 1 → Cột dữ liệu
+### 5.2. Hồ sơ lấy dữ liệu từ đâu khi giao việc
 
-Payload tiếp nhận **giữ nguyên cấu trúc** đã mô tả trong `giai-doan-1/Tai_lieu_mo_ta_API_full.md`. Bảng ánh xạ:
+| Cột                                                                      | Nguồn                                                                 |
+| :----------------------------------------------------------------------- | :-------------------------------------------------------------------- |
+| `id`                                                                     | `work_items.id`                                                       |
+| `title`, `description`, `address`, `latitude`, `longitude`               | Công việc; thiếu tọa độ/địa chỉ thì lấy của camera                    |
+| `ai_event_id`, `camera_*`, `task_type`, `model_id`, `overall_confidence` | Nguồn đầu tiên nếu là camera, ngược lại `null`                        |
+| `detection_photos`                                                       | Ảnh đính kèm của công việc                                            |
+| `alert_count`, `detected_at`, `last_detected_at`                         | `source_count`, `first_reported_at`, `last_reported_at` của công việc |
+| `flood_level`, `is_urgent_alert`                                         | `module_payload` của công việc                                        |
+| `assigned_department_snapshot`                                           | Phòng ban của cán bộ được giao                                        |
+| `sla_deadline`                                                           | Thời điểm giao + `processing_hours` của `sla_policies` theo mức ngập  |
 
-| Trường payload                                            | Cột lưu trữ                                   | Ghi chú                                                                                                                                                   |
-| :-------------------------------------------------------- | :-------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `event_id`                                                | `flood_events.ai_event_id`                    | **UNIQUE** — khóa chống trùng khi AI Box gửi lại.                                                                                                         |
-| `camera.id`                                               | `flood_events.camera_id`                      | **Chính là định danh điểm ngập.** Không FK, không có bảng `cameras`.                                                                                      |
-| `camera.name` / `camera.address`                          | `camera_name` / `camera_address`              | Snapshot để hiển thị lịch sử đúng khi CMS đổi tên.                                                                                                        |
-| `camera.lat` / `camera.lng`                               | `camera_lat` / `camera_lng`                   | Tọa độ ghim bản đồ hiện trường.                                                                                                                           |
-| `camera.group_id` / `camera.group.name`                   | `camera_group_id` / `camera_group_name`       | Dùng để lọc & thống kê theo cụm camera.                                                                                                                   |
-| `camera.username` / `camera.stream_url`                   | **Không lưu**                                 | Theo khuyến nghị mục 8 tài liệu API — tránh lộ thông tin kết nối. Chức năng xem camera trực tiếp chưa nằm trong phạm vi tài liệu này.                     |
-| `detected_objects[]`                                      | `flood_events.detected_objects` (JSONB)       | Lưu **nguyên mảng**. Chỉ dùng để vẽ overlay `bounding_box` lên ảnh và đối soát với AI Box — không có truy vấn nghiệp vụ nào theo từng đối tượng.          |
-| `detected_objects[].model_id`                             | `flood_events.model_id`                       | Tách riêng ra cột để thống kê tỷ lệ cảnh báo sai theo phiên bản model. Lấy `model_id` của đối tượng đầu tiên (một sự kiện chỉ do một model sinh).         |
-| `detected_objects[].media_identifier`                     | `flood_events.detection_photos` (JSONB array) | Gom URL ảnh AI cắt ra, **khử trùng lặp** vì nhiều đối tượng thường trỏ cùng một ảnh. Khi gộp trùng, ảnh của cảnh báo sau được nối thêm vào đây (xem 4.2). |
-| `arr_roi_info`                                            | `flood_events.roi_info` (JSONB)               | Lưu nguyên bản, phục vụ hiển thị overlay và đối soát cấu hình — không truy vấn.                                                                           |
-| `event_data`                                              | `flood_events.event_data` (JSONB)             | Giữ nguyên `q_object_classes`, `q_license_plates`.                                                                                                        |
-| `object_count`, `overall_confidence`, `processing_status` | Cột cùng tên                                  | `overall_confidence` dùng cho ngưỡng lọc & phân tích chất lượng model.                                                                                    |
-| `task_name`, `task_group`, `task_type`                    | Cột cùng tên                                  | `task_type` xác định đây là sự kiện ngập; các `task_type` khác định tuyến sang phân hệ tương ứng.                                                         |
+`intake_deadline` để `null`: hạn tiếp nhận thuộc Công việc.
 
-> **Về trường thời gian**: payload giai đoạn 1 chưa có trường thời điểm phát hiện ở cấp sự kiện (chỉ `camera.group.created_at`). Backend tạm dùng **thời điểm nhận request** làm `detected_at`. **Kiến nghị AI Box bổ sung `event_time` (Unix timestamp millisecond)** để lịch sử phản ánh đúng thời điểm ngập thực tế khi hàng đợi AI bị trễ; khi có trường này, Backend ưu tiên dùng nó.
+### 5.3. Migration
 
----
+| Migration                                                                                     | Nội dung                                                                                                        |
+| :-------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------- |
+| `CreateFloodEventsTable`, `CreateFloodEventTimelinesTable`, `CreateFloodEventDuplicatesTable` | Ba bảng v1                                                                                                      |
+| `DropFloodEventsVersionColumn`                                                                | Bỏ `version`, chuyển sang khóa hàng                                                                             |
+| `AddFloodEventsDeclineColumns`                                                                | `assigned_by_user_id`, `decline_reason`                                                                         |
+| `DropFloodEventTimelinesStatusChangedCheck`                                                   | Cho phép dòng timeline không đổi trạng thái                                                                     |
+| `AddFloodEventsAssignedAt`                                                                    | `assigned_at`                                                                                                   |
+| `AddFloodEventsDeadlines`                                                                     | `intake_deadline`, `sla_deadline`                                                                               |
+| `AlterFloodEventsCameraColumnsNullable`                                                       | `ai_event_id`, `camera_id`, `camera_lat`, `camera_lng` cho phép `NULL`. Revert lỗi nếu đã có hồ sơ không camera |
+| `AddFloodEventsIncidentColumns`                                                               | `title`, `description`, `address`, `latitude`, `longitude` + `chk_flood_events_coordinates`                     |
+| `BackfillFloodEventsIncidentColumns`                                                          | Điền từ snapshot camera cho dữ liệu cũ; `title` bắt buộc                                                        |
+| `AddFloodEventsWorkItemForeignKey`                                                            | `fk_flood_events_id` → `work_items.id`, `NOT VALID` để dữ liệu ingest cũ không chặn migration                   |
+| `DropFloodEventsOpenByCameraIndex`                                                            | Bỏ index phục vụ tự gộp theo camera                                                                             |
+| `AddWorkItemsRejectionNotifiesReporter`                                                       | `work_items.rejection_notifies_reporter`                                                                        |
+| `BackfillWorkItemsRejectionNotifiesReporter`                                                  | `true` cho hồ sơ Dịch vụ đô thị số đã từ chối, giữ việc lý do từng được công khai                               |
 
-### 3.3. Chi tiết DDL các bảng nghiệp vụ ngập úng
-
-Tuân thủ quy ước trong `quan-ly-hien-truong-be/AGENT.md`:
-
-- Khóa chính dùng **UUID** sinh bởi `gen_random_uuid()` — hàm này nằm sẵn trong PostgreSQL 13+ nên **không cần tạo extension**, đúng quy ước "migration không tạo extension". Đây là sai lệch có chủ ý so với `BaseEntity`, ghi ở mục 6.4.
-- `users.id` cũng là **UUID** (Keycloak `sub`) nên FK trỏ tới người dùng đồng kiểu, không cần chuyển đổi.
-- PostgreSQL 14, không PostGIS → toạ độ lưu bằng hai cột `numeric`, không dùng kiểu không gian.
-- Tên ràng buộc/index theo mẫu `fk_`, `idx_`, `uq_`, `chk_` + tên bảng + cột.
-- Schema chỉ vào database qua migration; `synchronize` luôn tắt.
-
-```sql
--- =====================================================================
--- 1. Bảng chính: Sự kiện ngập
---    Điểm ngập = camera (camera_id). Không có bảng cameras, không có
---    bảng danh mục điểm ngập.
--- =====================================================================
-CREATE TABLE flood_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_code TEXT NOT NULL,                    -- 'FLD-08-2026-000123' — mã duy nhất toàn vòng đời
-    ai_event_id TEXT NOT NULL,                   -- 'event_id' từ AI Box — mọi sự kiện đều đến từ camera
-
-    -- ĐIỂM NGẬP = CAMERA (snapshot từ payload, không FK)
-    camera_id TEXT NOT NULL,                     -- 'cam_h28xUnSIzHY3TrF6tmsGo'
-    camera_name TEXT,                            -- 'Cam 009'
-    camera_address TEXT,                         -- 'Ngã tư Bà Triệu'
-    camera_lat NUMERIC(10, 7) NOT NULL,
-    camera_lng NUMERIC(10, 7) NOT NULL,
-    camera_group_id TEXT,
-    camera_group_name TEXT,
-
-    -- Metadata tác vụ AI
-    task_name TEXT,
-    task_group TEXT,
-    task_type TEXT,                              -- 'flood_detection'
-    processing_status TEXT,                      -- 'pending','processing','completed','failed'
-    object_count INT NOT NULL DEFAULT 0,
-    overall_confidence NUMERIC(6, 5),            -- 0.91000
-    model_id TEXT,                               -- 'ANS_Flood_v3 v1.0' — tách ra để thống kê theo model
-    detected_objects JSONB,                      -- detected_objects[] nguyên bản (bounding_box, tracking_id, attributes...)
-
-    -- Ảnh: lưu trực tiếp dạng mảng JSONB, không tách bảng riêng
-    detection_photos JSONB NOT NULL DEFAULT '[]'::jsonb,
-        -- [{ "url": "https://.../20260806_084100_1.jpg", "capturedAt": "2026-08-06T08:41:00+07:00" }]
-    after_photos JSONB NOT NULL DEFAULT '[]'::jsonb,
-        -- [{ "url": "https://.../result_1.jpg", "uploadedBy": "<uuid>", "uploadedAt": "..." }]
-    roi_info JSONB,                              -- arr_roi_info nguyên bản
-    event_data JSONB,                            -- q_object_classes, q_license_plates
-
-    -- Trạng thái & phân loại nghiệp vụ
-    status TEXT NOT NULL DEFAULT 'PENDING',
-        -- 'PENDING','VERIFIED','SUBMITTED','DONE','MERGED','REJECTED'
-    flood_level TEXT,                            -- 'LOW' (nhẹ), 'MID' (trung bình), 'HIGH' (nặng)
-    detect_note TEXT,
-
-    -- Gộp trùng & diễn biến leo thang
-    merged_count INT NOT NULL DEFAULT 0,
-    merged_into_event_id UUID,
-    alert_count INT NOT NULL DEFAULT 1,          -- Tổng số cảnh báo AI đã dồn vào sự kiện này (kể cả cảnh báo đầu)
-    last_detected_at TIMESTAMPTZ NOT NULL,       -- Thời điểm cảnh báo GẦN NHẤT — sự kiện càng mới càng nổi lên đầu hàng đợi
-
-    -- Cảnh báo khẩn (việc hiển thị trên bản đồ suy ra từ status, không lưu cờ riêng)
-    is_urgent_alert BOOLEAN NOT NULL DEFAULT FALSE,
-
-    -- Giao việc. Chưa có bảng departments trong hệ thống nên phòng ban chỉ
-    -- lưu dạng snapshot văn bản; thay bằng FK khi bảng đó ra đời.
-    assigned_user_id UUID,
-    assigned_user_snapshot TEXT,
-    assigned_department_snapshot TEXT,
-
-    -- Mốc thời gian nghiệp vụ
-    detected_at TIMESTAMPTZ NOT NULL,
-    accepted_at TIMESTAMPTZ,
-    submitted_at TIMESTAMPTZ,
-    approved_at TIMESTAMPTZ,
-
-    -- Nội dung nghiệp vụ
-    submit_note TEXT,
-    return_note TEXT,
-    approve_note TEXT,
-    reject_reason TEXT,
-
-    version INT NOT NULL DEFAULT 1,              -- @VersionColumn — optimistic lock
-
-    -- Khai báo tường minh: entity không kế thừa BaseEntity (xem mục 6.4)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ,
-
-    CONSTRAINT uq_flood_events_event_code UNIQUE (event_code),
-    CONSTRAINT uq_flood_events_ai_event_id UNIQUE (ai_event_id),
-    CONSTRAINT fk_flood_events_merged_into_event_id
-        FOREIGN KEY (merged_into_event_id) REFERENCES flood_events(id) ON DELETE SET NULL,
-    CONSTRAINT fk_flood_events_assigned_user_id
-        FOREIGN KEY (assigned_user_id) REFERENCES users(id) ON DELETE SET NULL,
-    CONSTRAINT chk_flood_events_status
-        CHECK (status IN ('PENDING','VERIFIED','SUBMITTED','DONE','MERGED','REJECTED')),
-    CONSTRAINT chk_flood_events_flood_level
-        CHECK (flood_level IS NULL OR flood_level IN ('LOW','MID','HIGH')),
-    CONSTRAINT chk_flood_events_merge_self
-        CHECK (merged_into_event_id IS NULL OR merged_into_event_id <> id)
-);
-
-CREATE INDEX idx_flood_events_status ON flood_events(status);
-CREATE INDEX idx_flood_events_camera_id ON flood_events(camera_id);
-CREATE INDEX idx_flood_events_camera_group_id ON flood_events(camera_group_id);
-CREATE INDEX idx_flood_events_model_id ON flood_events(model_id);
-CREATE INDEX idx_flood_events_detected_at ON flood_events(detected_at DESC);
-CREATE INDEX idx_flood_events_last_detected_at ON flood_events(last_detected_at DESC);
-CREATE INDEX idx_flood_events_assigned_user_id ON flood_events(assigned_user_id);
-
--- Index cốt lõi cho dò trùng: tìm nhanh sự kiện ĐANG MỞ của một camera
-CREATE INDEX idx_flood_events_open_by_camera ON flood_events(camera_id, detected_at)
-    WHERE status IN ('PENDING','VERIFIED') AND deleted_at IS NULL;
-
--- Index cho tab "Chờ xử lý"
-CREATE INDEX idx_flood_events_pending ON flood_events(detected_at)
-    WHERE status = 'PENDING' AND deleted_at IS NULL;
-
--- Index cho lớp bản đồ hiện trường: các sự kiện chưa đóng đều hiển thị
-CREATE INDEX idx_flood_events_on_map ON flood_events(camera_id)
-    WHERE status IN ('PENDING','VERIFIED','SUBMITTED') AND deleted_at IS NULL;
-
--- =====================================================================
--- 2. Nhật ký tiến trình (Audit Trail — chỉ INSERT)
---    Là NGUỒN DUY NHẤT dựng dải "Tiến độ xử lý" trên giao diện.
---    MỖI DÒNG = MỘT LẦN CHUYỂN TRẠNG THÁI.
--- =====================================================================
-CREATE TABLE flood_event_timelines (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id UUID NOT NULL,
-    action_name TEXT NOT NULL,                   -- 'ACCEPT_EVENT', 'SUBMIT_RESULT', 'APPROVE_RESULT'...
-    step_name TEXT NOT NULL,                     -- 'Đã nhận việc', 'Quản trị xác nhận hoàn thành'
-    from_status TEXT,
-    to_status TEXT NOT NULL,
-    executed_by_user_id UUID,
-    user_display_snapshot TEXT,
-    department_name_snapshot TEXT,
-    note TEXT,
-    actual_time TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ,
-
-    CONSTRAINT fk_flood_event_timelines_event_id
-        FOREIGN KEY (event_id) REFERENCES flood_events(id) ON DELETE CASCADE,
-    CONSTRAINT fk_flood_event_timelines_executed_by_user_id
-        FOREIGN KEY (executed_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
-    CONSTRAINT chk_flood_event_timelines_status_changed
-        CHECK (from_status IS NULL OR from_status <> to_status)
-);
-
-CREATE INDEX idx_flood_event_timelines_event_id ON flood_event_timelines(event_id, actual_time ASC);
-
--- =====================================================================
--- 3. Liên kết sự kiện trùng (hỗ trợ gộp & tách)
--- =====================================================================
-CREATE TABLE flood_event_duplicates (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    master_event_id UUID NOT NULL,
-    duplicate_event_id UUID NOT NULL,
-    merge_type TEXT NOT NULL DEFAULT 'MANUAL',   -- 'AUTO', 'MANUAL'
-    merged_by_user_id UUID,
-    merged_by_snapshot TEXT,
-    note TEXT,
-    merged_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    unmerged_at TIMESTAMPTZ,
-    unmerged_by_user_id UUID,
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ,
-
-    CONSTRAINT fk_flood_event_duplicates_master_event_id
-        FOREIGN KEY (master_event_id) REFERENCES flood_events(id) ON DELETE CASCADE,
-    CONSTRAINT fk_flood_event_duplicates_duplicate_event_id
-        FOREIGN KEY (duplicate_event_id) REFERENCES flood_events(id) ON DELETE CASCADE,
-    CONSTRAINT fk_flood_event_duplicates_merged_by_user_id
-        FOREIGN KEY (merged_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
-    CONSTRAINT fk_flood_event_duplicates_unmerged_by_user_id
-        FOREIGN KEY (unmerged_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
-    CONSTRAINT uq_flood_event_duplicates_pair UNIQUE (master_event_id, duplicate_event_id),
-    CONSTRAINT chk_flood_event_duplicates_self CHECK (master_event_id <> duplicate_event_id),
-    CONSTRAINT chk_flood_event_duplicates_merge_type CHECK (merge_type IN ('AUTO','MANUAL'))
-);
-
-CREATE INDEX idx_flood_event_duplicates_master_event_id
-    ON flood_event_duplicates(master_event_id)
-    WHERE unmerged_at IS NULL;
-```
-
-#### Thứ tự migration
-
-Mỗi bảng một migration, tên PascalCase mở đầu bằng động từ hợp lệ:
+Dữ liệu `flood_events` tạo bởi ingest v1 không được chuyển sang Công việc. Sau khi xóa dữ liệu cũ nên chạy `ALTER TABLE flood_events VALIDATE CONSTRAINT fk_flood_events_id`.
 
 ```bash
-pnpm run db:generate CreateFloodEventsTable
-pnpm run db:generate CreateFloodEventTimelinesTable
-pnpm run db:generate CreateFloodEventDuplicatesTable
-pnpm run db:migrate && pnpm run db:revert && pnpm run db:migrate
-```
-
-#### Tham số cấu hình (biến môi trường, không lưu DB)
-
-Khai báo trong `src/config/env.validation.ts`, đọc qua `ConfigService`, thêm giá trị local vào `.env.example`:
-
-| Biến                       | Mặc định          | Ý nghĩa                                                      |
-| :------------------------- | :---------------- | :----------------------------------------------------------- |
-| `FLOOD_AI_MIN_CONFIDENCE`  | `0.65`            | `overall_confidence` tối thiểu để nhận sự kiện từ AI Box     |
-| `FLOOD_AUTO_MERGE_ENABLED` | `true`            | Tự động gộp cảnh báo mới vào sự kiện đang mở của cùng camera |
-| `FLOOD_TASK_TYPES`         | `flood_detection` | Danh sách `task_type` được định tuyến vào phân hệ ngập úng   |
-
----
-
-### 3.4. Hệ quả của việc dùng camera làm điểm ngập
-
-Thiết kế **không có bảng danh mục điểm ngập**. Các nhu cầu nghiệp vụ được đáp ứng như sau:
-
-| Nhu cầu nghiệp vụ                   | Cách đáp ứng                                                                                                   |
-| :---------------------------------- | :------------------------------------------------------------------------------------------------------------- |
-| Hiển thị tên điểm ngập              | `camera_name` + `camera_address` (snapshot từ payload)                                                         |
-| Ghim vị trí trên bản đồ             | `camera_lat` / `camera_lng`                                                                                    |
-| Bộ lọc "Điểm ngập" trên hàng đợi    | Dropdown sinh từ `SELECT DISTINCT camera_id, camera_name FROM flood_events` (hoặc gọi danh sách camera từ CMS) |
-| Thống kê theo điểm ngập             | `GROUP BY camera_id`                                                                                           |
-| Nhóm nhiều camera thành một khu vực | `camera_group_id` / `camera_group_name` có sẵn trong payload                                                   |
-| Dò trùng                            | Đối chiếu trực tiếp `camera_id` — không cần bán kính, không cần Haversine                                      |
-
-> **Điểm cần lưu ý khi vận hành**: vì điểm ngập gắn với camera, việc **di dời hoặc thay thế camera** sẽ tạo ra một điểm ngập mới trong thống kê dù thực địa không đổi. Nếu phường cần theo dõi điểm ngập xuyên suốt qua các lần thay thiết bị, giải pháp là gom theo `camera_group_id` — đặt các camera cùng soi một vị trí vào chung một nhóm trên CMS.
-
----
-
-## 4. THUẬT TOÁN & CƠ CHẾ KỸ THUẬT ĐẶC THÙ (SPECIALIZED MECHANISMS & ALGORITHMS)
-
-### 4.1. Cơ chế sinh mã sự kiện duy nhất
-
-Hệ thống dùng **một mã duy nhất** cho toàn bộ vòng đời, cấp ngay tại thời điểm tiếp nhận và **không đổi** qua các trạng thái:
-
-| Quy chuẩn                          | Ví dụ                | Thời điểm sinh                           |
-| :--------------------------------- | :------------------- | :--------------------------------------- |
-| `FLD-<Tháng>-<Năm>-<STT 6 chữ số>` | `FLD-08-2026-000123` | Ngay khi AI Box đẩy sự kiện vào hàng đợi |
-
-- Khóa chính `id` là UUID, chỉ dùng nội bộ và cho các khóa ngoại. **API định danh sự kiện bằng `event_code`** — mã nghiệp vụ cán bộ đọc và trao đổi được.
-- **Thống kê số vụ xử lý thực tế**: lọc theo trạng thái, ví dụ `COUNT(*) WHERE status IN ('VERIFIED','SUBMITTED','DONE')` — loại trừ `REJECTED` (cảnh báo sai) và `MERGED` (trùng lặp).
-
-```typescript
-@Injectable()
-export class FloodCodeGeneratorService {
-  constructor(private readonly redisService: RedisService) {}
-
-  async generateEventCode(detectedAt: Date): Promise<string> {
-    const mm = dayjs(detectedAt).format('MM');
-    const yyyy = dayjs(detectedAt).format('YYYY');
-    const key = `seq:flood_event:${yyyy}${mm}`;
-    const seq = await this.redisService.incr(key); // INCR atomic — chống race condition
-    if (seq === 1) await this.redisService.expire(key, 60 * 60 * 24 * 40);
-    return `FLD-${mm}-${yyyy}-${String(seq).padStart(6, '0')}`;
-  }
-}
-```
-
-> **Fallback khi Redis mất kết nối**: dùng bảng `flood_code_sequences(scope_key, current_value)` với `UPDATE ... RETURNING` trong transaction để giữ tính duy nhất.
-
----
-
-### 4.2. Thuật toán gộp sự kiện trùng (Dedup theo camera)
-
-Vì **điểm ngập chính là camera**, việc dò trùng trở nên đơn giản và chính xác tuyệt đối — không cần tính khoảng cách:
-
-```
-Cảnh báo mới B là trùng của sự kiện A khi:
-  A.camera_id = B.camera_id                    (cùng camera → cùng điểm ngập)
-VÀ A.status ∈ {PENDING, VERIFIED}              (sự kiện chính còn đang mở)
-VÀ A.merged_into_event_id IS NULL              (không gộp lồng nhau)
-```
-
-> **Không dùng cửa sổ thời gian**: chừng nào điểm ngập chưa được xử lý xong (`DONE`), mọi cảnh báo mới từ camera đó đều thuộc **cùng một đợt ngập** — kể cả khi cách nhau vài giờ do mưa kéo dài. Ranh giới đóng/mở của sự kiện chính chính là ranh giới gom trùng, tránh việc một đợt ngập kéo dài bị xé thành hàng chục sự kiện rời rạc.
-
-#### Gộp trùng phải giữ được diễn biến leo thang
-
-Gộp im lặng sẽ **che mất tình huống nước dâng**: sự kiện nằm ở `PENDING` từ 08:41, camera bắn thêm lúc 09:10 · 09:30 · 10:00 với mực nước cao dần, nhưng cả ba đều biến khỏi hàng đợi và cán bộ mở hồ sơ vẫn chỉ thấy ảnh lúc 08:41. Vì vậy mỗi lần gộp, sự kiện chính được **làm giàu** thay vì chỉ đếm:
-
-| Cập nhật trên sự kiện chính                    | Tác dụng                                                                                    |
-| :--------------------------------------------- | :------------------------------------------------------------------------------------------ |
-| `alert_count += 1`                             | Hàng đợi hiện badge _"Đang tiếp diễn · 4 cảnh báo"_ — cường độ nhìn thấy được ngay          |
-| `last_detected_at = cảnh báo mới nhất`         | Sắp xếp mặc định theo cột này, sự kiện đang leo thang nổi lên đầu                           |
-| Nối ảnh của sự kiện con vào `detection_photos` | Cán bộ xem chuỗi ảnh 08:41 → 10:00, tự đánh giá nước dâng bao nhiêu trước khi chọn mức ngập |
-| `overall_confidence = MAX(cũ, mới)`            | Giữ độ tin cậy cao nhất của cả đợt, không kẹt ở giá trị thấp của cảnh báo đầu               |
-
-`detection_photos` giới hạn **10 ảnh gần nhất** để cột JSONB không phình theo một đợt mưa kéo dài; ảnh cũ hơn vẫn truy được qua sự kiện con đã gộp.
-
-```typescript
-@Injectable()
-export class FloodDeduplicationService {
-  /** Tìm sự kiện đang mở của cùng camera. Ưu tiên sự kiện mở sớm nhất. */
-  async findMasterCandidate(cameraId: string, excludeId?: string): Promise<FloodEvent | null> {
-    return this.repo.findOne({
-      where: {
-        cameraId,
-        status: In(['PENDING', 'VERIFIED']),
-        mergedIntoEventId: IsNull(),
-        deletedAt: IsNull(),
-        ...(excludeId ? { id: Not(excludeId) } : {}),
-      },
-      order: { detectedAt: 'ASC' },
-    });
-  }
-
-  /**
-   * Merge a duplicate into its master.
-   *
-   * The duplicate keeps its own AI payload untouched. The master absorbs the
-   * escalation signals so a rising flood stays visible while nobody has picked
-   * the event up yet.
-   */
-  async merge(
-    master: FloodEvent,
-    duplicate: FloodEvent,
-    actor: UserContext,
-    type: 'AUTO' | 'MANUAL',
-  ) {
-    if (duplicate.status === 'MERGED') throw new ConflictException('Sự kiện đã được gộp trước đó.');
-    if (master.mergedIntoEventId)
-      throw new ConflictException('Không gộp vào một sự kiện đã bị gộp.');
-
-    duplicate.status = 'MERGED';
-    duplicate.mergedIntoEventId = master.id;
-
-    master.mergedCount = (await this.countChildren(master.id)) + 1;
-    master.alertCount += 1;
-    master.lastDetectedAt = maxDate(master.lastDetectedAt, duplicate.detectedAt);
-    master.overallConfidence = Math.max(
-      master.overallConfidence ?? 0,
-      duplicate.overallConfidence ?? 0,
-    );
-    master.detectionPhotos = mergePhotos(
-      master.detectionPhotos,
-      duplicate.detectionPhotos,
-      MAX_DETECTION_PHOTOS, // keep the 10 most recent
-    );
-
-    await this.duplicateRepo.save({
-      masterEventId: master.id,
-      duplicateEventId: duplicate.id,
-      mergeType: type,
-      mergedByUserId: actor.userId,
-      mergedBySnapshot: actor.displayName,
-    });
-  }
-}
-```
-
-**Tách khỏi nhóm (Unmerge)**: cập nhật `flood_event_duplicates.unmerged_at`, đưa sự kiện con về `PENDING`, `merged_into_event_id = NULL`, tính lại `merged_count` và `alert_count` của sự kiện cha, gỡ ảnh của sự kiện con khỏi `detection_photos` của cha, và ghi mốc audit — **không xóa bản ghi lịch sử gộp**.
-
-**Gộp thủ công liên camera**: hai camera kề nhau cùng soi một đoạn đường ngập vẫn có thể gộp bằng tay từ hàng đợi — mỗi lần một sự kiện. Khi đó `merge_type = 'MANUAL'`, sự kiện chính giữ camera của chính nó, sự kiện con vẫn lưu camera gốc để không mất dấu nguồn phát hiện.
-
----
-
-### 4.3. Hiển thị điểm ngập trên bản đồ & Cảnh báo khẩn
-
-#### a) Điểm ngập lên bản đồ ngay từ lúc AI bắn về
-
-Bản đồ ngập úng **không có cờ riêng** — việc hiển thị **suy ra trực tiếp từ `status`**, nên không bao giờ lệch giữa hàng đợi và bản đồ:
-
-| Trạng thái                     | Hiển thị trên bản đồ hiện trường                                                      |
-| :----------------------------- | :------------------------------------------------------------------------------------ |
-| `PENDING`                      | **Ghim nét đứt, màu xám — "Chưa xác minh"**. Có ngay khi AI bắn về, không chờ cán bộ. |
-| `VERIFIED`                     | Ghim đặc, tô màu theo mức ngập: vàng (nhẹ) / cam (trung bình) / đỏ (nặng)             |
-| `SUBMITTED`                    | Ghim đặc + badge "Chờ duyệt"                                                          |
-| `DONE` / `REJECTED` / `MERGED` | Không hiển thị (đã đóng hoặc gộp vào sự kiện chính)                                   |
-
-Lý do ghim ngay ở `PENDING`: sự kiện có thể nằm chờ cán bộ xác minh khá lâu — nếu đợi cán bộ nhận việc mới ghim thì suốt quãng đó bản đồ không phản ánh thực tế đang ngập. Bản đồ là **công cụ nội bộ của cán bộ**, nên hiển thị cả cảnh báo chưa xác minh là có lợi; nhãn "Chưa xác minh" đủ để người xem không nhầm với điểm đã kiểm chứng.
-
-#### b) Luồng khi cán bộ bấm "Nhận việc"
-
-Thực hiện trong **một transaction**:
-
-```mermaid
-flowchart TD
-    A["Cán bộ bấm Nhận việc"] --> B{"Validate: mức ngập,<br/>cán bộ xử lý"}
-    B -->|Thiếu| E1["400 Bad Request"]
-    B -->|Đủ| D["Gộp sự kiện trùng đã chọn (nếu có)"]
-    D --> F["status = VERIFIED<br/>(marker đổi màu theo mức ngập)"]
-    F --> H{"Bật cảnh báo khẩn?"}
-    H -->|Có| I["is_urgent_alert = TRUE<br/>Bắn thông báo tới cán bộ trực + lãnh đạo"]
-    H -->|Không| J["Bỏ qua"]
-    I --> K["Ghi timeline + Phát domain events"]
-    J --> K
-    K --> L["Thông báo cán bộ được giao<br/>+ Cập nhật lớp bản đồ ngập"]
-```
-
-- **Cảnh báo khẩn (`is_urgent_alert`)** là tùy chọn ngay trên form Nhận việc, chỉ dùng khi tình huống nguy cấp: bắn thông báo tức thì tới **cán bộ trực + lãnh đạo**, sự kiện hiển thị badge đỏ _"Đã phát cảnh báo"_. Cờ này chỉ đặt **một lần tại thời điểm nhận việc**, không có thao tác phát cảnh báo bổ sung về sau.
-- **Khi `APPROVE_RESULT`**: trạng thái sang `DONE` → marker **tự rời bản đồ** (không cần cập nhật cờ nào).
-- **Khi `RETURN_RESULT`** (chưa đạt): quay về `VERIFIED` → marker **vẫn còn trên bản đồ**.
-
----
-
-### 4.4. Kiến trúc thông báo tách rời (Decoupled Notification Architecture)
-
-```mermaid
-flowchart LR
-    SVC["FloodEventsService"] -->|Phát sự kiện| EMITTER["EventEmitter2"]
-
-    EMITTER --> S1["InAppNotificationSubscriber (chuông + badge sidebar)"]
-    EMITTER --> S2["MapLayerSubscriber (cập nhật lớp bản đồ ngập)"]
-    EMITTER --> S3["AuditLogSubscriber (ghi flood_event_timelines)"]
-    EMITTER -.-> S4["MobilePushSubscriber (FCM — tương lai)"]
-```
-
-| Domain Event                      | Thời điểm phát                 | Người nhận thông báo                                                                         |
-| :-------------------------------- | :----------------------------- | :------------------------------------------------------------------------------------------- |
-| `flood.event.detected`            | AI Box đẩy sự kiện mới         | Cán bộ trực (`flood.event.manage`) — badge tab "Chờ xử lý" + ghim "Chưa xác minh" lên bản đồ |
-| `flood.event.accepted`            | Nhận việc, giao cán bộ xử lý   | Cán bộ được giao + lớp bản đồ                                                                |
-| `flood.event.urgent_alert`        | Nhận việc có bật cảnh báo khẩn | Toàn bộ cán bộ trực + Lãnh đạo                                                               |
-| `flood.event.merged` / `unmerged` | Gộp / tách sự kiện             | Cán bộ đang giữ sự kiện chính                                                                |
-| `flood.event.submitted`           | Cán bộ báo xong                | Quản trị hệ thống (tab "Chờ duyệt")                                                          |
-| `flood.event.approved`            | Quản trị duyệt đạt             | Cán bộ xử lý + lớp bản đồ (marker rời bản đồ)                                                |
-| `flood.event.returned`            | Quản trị trả lại               | Cán bộ xử lý                                                                                 |
-
-```typescript
-export class FloodEventAcceptedEvent {
-  constructor(
-    public readonly eventId: string, // UUID
-    public readonly eventCode: string,
-    public readonly cameraName: string,
-    public readonly floodLevel: 'LOW' | 'MID' | 'HIGH',
-    public readonly assignedUserId: string,
-    public readonly isUrgentAlert: boolean,
-  ) {}
-}
-
-@Injectable()
-export class FloodNotificationSubscriber {
-  constructor(private readonly inApp: InAppNotificationService) {}
-
-  @OnEvent('flood.event.detected')
-  async onDetected(e: FloodEventDetectedEvent) {
-    await this.inApp.sendToRole({
-      role: 'flood.event.manage',
-      title: 'Sự kiện ngập mới cần xử lý',
-      body: `${e.eventCode} · ${e.cameraName} · ${e.cameraAddress}`,
-      link: `/flood-events?code=${e.eventCode}`,
-    });
-  }
-
-  @OnEvent('flood.event.accepted')
-  async onAccepted(e: FloodEventAcceptedEvent) {
-    await this.inApp.sendToUser({
-      userId: e.assignedUserId,
-      title: 'Bạn được giao xử lý sự kiện ngập',
-      body: `Sự kiện ${e.eventCode} tại ${e.cameraName} (${e.floodLevel}).`,
-      link: `/flood-events/${e.eventCode}`,
-    });
-    if (e.isUrgentAlert) {
-      await this.inApp.sendToRole({
-        role: 'flood.event.manage',
-        title: '⚠ CẢNH BÁO NGẬP KHẨN',
-        body: `${e.eventCode} — ${e.cameraName}. Đề nghị các bộ phận phối hợp xử lý ngay.`,
-      });
-    }
-  }
-}
+pnpm run db:migrate && pnpm run db:revert && pnpm run db:migrate   # kiểm tra trên máy dev
 ```
 
 ---
 
-## 5. DANH MỤC THIẾT KẾ RESTFUL API CONTRACTS
+## 6. CÁC CƠ CHẾ ĐẶC THÙ
 
-### 5.1. API tiếp nhận từ AI Box (Service-to-Service)
+### 6.1. Sinh mã hồ sơ
 
-#### Đẩy sự kiện ngập từ Camera AI
+`FLD-<Tháng>-<Năm>-<STT 6 chữ số>`, tháng/năm theo `first_reported_at` của công việc. `FloodCodeGeneratorService` lấy advisory lock theo tháng rồi đếm số hồ sơ cùng tiền tố trong transaction.
 
-- **Endpoint**: `POST /api/v1/flood-events/ingest`
-- **Auth**: Service Account — `@RequireRole('flood.event.ingest')`
-- **Request Body**: **giữ nguyên schema payload giai đoạn 1**, không yêu cầu AI Box đổi format:
-  ```json
-  {
-    "camera": {
-      "id": "cam_h28xUnSIzHY3TrF6tmsGo",
-      "name": "Cam 009",
-      "address": "Ngã tư Bà Triệu",
-      "lat": 20.654312,
-      "lng": 106.052145,
-      "group_id": "cg_uzNWenG0PkaY5z89vANkW",
-      "group": {
-        "id": "cg_uzNWenG0PkaY5z89vANkW",
-        "created_at": 1785124559595,
-        "updated_at": 1785124559595,
-        "name": "Cam W1",
-        "description": "Tất cả các camera W1"
-      }
-    },
-    "detected_objects": [
-      {
-        "object_id": "5-flood",
-        "class_label": "flood",
-        "confidence_score": 0.91,
-        "bounding_box": { "left": 566, "top": 380, "right": 1655, "bottom": 718 },
-        "tracking_id": 5,
-        "media_identifier": "https://aibox-cm-events.s3.vn1.aiboxvision.com/image/20260806_084100_1.jpg",
-        "model_id": "ANS_Flood_v3 v1.0"
-      }
-    ],
-    "event_data": { "q_license_plates": [], "q_object_classes": ["flood"] },
-    "arr_roi_info": [
-      {
-        "roi_points": [
-          { "x": 265, "y": 325 },
-          { "x": 1269, "y": 560 },
-          { "x": 96, "y": 720 }
-        ],
-        "roi_match": "Centre Point",
-        "option": "Inside ROI",
-        "name": "Polygon 1",
-        "roi_type": "Generic",
-        "custom_model_roi": false,
-        "original_image_size": 2688
-      }
-    ],
-    "event_id": "6a72fe1e25c71dcf3db2cb4b",
-    "object_count": 1,
-    "overall_confidence": 0.91,
-    "processing_status": "completed",
-    "task_name": "Phat hien ngap - Nga tu Ba Trieu",
-    "task_group": "urban_management",
-    "task_type": "flood_detection"
-  }
-  ```
-- **Response `201 Created`**:
-  ```json
-  {
-    "success": true,
-    "data": {
-      "id": "0f9a6c2e-73b8-4f21-9c0e-2b6d9a41c8d3",
-      "eventCode": "FLD-08-2026-000123",
-      "status": "PENDING",
-      "statusLabel": "Chờ xử lý",
-      "cameraId": "cam_h28xUnSIzHY3TrF6tmsGo",
-      "cameraName": "Cam 009",
-      "autoMerged": false,
-      "mergedIntoEventCode": null
-    }
-  }
-  ```
-- **Các nhánh phản hồi khác**:
-  - Tự động gộp trùng (camera đã có sự kiện đang mở): `status = "MERGED"`, `autoMerged = true`, `mergedIntoEventCode = "FLD-08-2026-000121"`.
-  - `event_id` đã tồn tại: trả `200 OK` kèm bản ghi cũ (**idempotent**), không tạo mới.
-  - `overall_confidence < FLOOD_AI_MIN_CONFIDENCE`: `422 Unprocessable Entity`, không tạo bản ghi.
-  - `task_type` không nằm trong `FLOOD_TASK_TYPES`: `400 Bad Request` — sai phân hệ.
+### 6.2. Đồng bộ với Công việc
+
+Hồ sơ Ngập úng là bản xử lý của một công việc; danh sách Công việc hiển thị bản chụp trạng thái của nó.
+
+| Chiều                        | Khi nào                                                                                | Cách làm                                                                                                                                                                          |
+| :--------------------------- | :------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Công việc → Ngập úng         | Giao việc, giao lại, từ chối nhận việc ở Công việc, nguồn đến sau, xác nhận/tách trùng | `FloodEventsWorkItemAdapter` gọi service Ngập úng trong cùng transaction; adapter trả snapshot để Công việc tự ghi                                                                |
+| Ngập úng → Công việc         | Mọi thao tác ở màn Ngập úng                                                            | `WorkItemModuleProjectionService.synchronize` trong cùng transaction: `module_status`, `processing_deadline`, `completed_at`, lý do từ chối, cờ `notify_reporter`, liên kết trùng |
+| Ngập úng → lịch sử giao việc | Tiếp nhận, từ chối nhận việc, chuyển xử lý                                             | `WorkItemAssignmentLedgerService`: đánh dấu đã tiếp nhận / giải phóng / thay người giữ (nguồn `TRANSFER`)                                                                         |
+
+- `PENDING` không người giữ hiển thị ở Công việc là **Chưa giao** (`module_status = null`).
+- Khi hồ sơ kết thúc, cửa sổ tương quan camera đóng: cảnh báo tiếp theo mở công việc mới.
+- Nguồn đến sau: `alert_count += 1`, `last_detected_at` lấy mốc mới hơn, ảnh nối vào `detection_photos` (khử trùng URL, giữ 10 ảnh gần nhất).
+- Xác nhận trùng khi cả hai đã có hồ sơ: hồ sơ phụ `MERGED`, bỏ người giữ; số lượt không cộng ở bước gộp vì nguồn được chuyển riêng từng cái qua `appendSource`. Một cặp từng bị tách được gộp lại dùng lại dòng `flood_event_duplicates` cũ.
+
+### 6.3. Thông báo nội bộ
+
+`FloodNotificationFactory` dựng thông báo, `NotificationPublisher.publish()` ghi trong cùng transaction, `broadcast()` qua WebSocket **sau khi commit**. Với thao tác bắt đầu từ Công việc, adapter đăng ký broadcast qua `onCommitted` để lõi chạy sau commit.
+
+| Domain event               | Thời điểm                                      | Người nhận                         |
+| :------------------------- | :--------------------------------------------- | :--------------------------------- |
+| `flood.event.assigned`     | Giao việc / giao lại / người nhận chuyển xử lý | Cán bộ được giao                   |
+| `flood.event.urgent-alert` | Như trên, khi `is_urgent_alert = true`         | Cán bộ được giao (mức URGENT)      |
+| `flood.event.accepted`     | Tiếp nhận xử lý                                | Người điều phối đã giao            |
+| `flood.event.declined`     | Từ chối nhận việc (ở Ngập úng hoặc Công việc)  | Người điều phối đã giao, kèm lý do |
+| `flood.event.transferred`  | Chuyển xử lý                                   | Người điều phối đã giao            |
+| `flood.event.approved`     | Xác nhận hoàn thành                            | Cán bộ xử lý                       |
+| `flood.event.returned`     | Chuyển lại xử lý                               | Cán bộ xử lý                       |
+
+Khóa idempotency của `assigned`, `accepted`, `declined`, `transferred` gắn với `id` dòng timeline, vì giao → từ chối → giao lại có thể lặp. `flood.event.detected` đã gỡ; chưa có thông báo khi cảnh báo ngập mới vào Công việc.
+
+### 6.4. Khóa hàng khi thao tác đồng thời
+
+Mọi thao tác ghi dùng `SELECT … FOR UPDATE`. Thao tác ở Ngập úng **khóa công việc trước, rồi mới khóa hồ sơ** — cùng thứ tự với giao việc ở Công việc — để hai bên không deadlock. Thao tác trên hai hồ sơ (gộp/tách) khóa cả cặp theo thứ tự `id`.
+
+### 6.5. Hạn xử lý
+
+`sla_deadline` = thời điểm giao + `processing_hours` của `sla_policies` (`FLOOD` / mức ngập). Hạn lưu trên hồ sơ, sửa cấu hình không làm xê dịch hồ sơ đã có hạn. Ngưỡng "sắp đến hạn" đọc từ cấu hình lúc hiển thị; bảng rỗng dùng `FLOOD_SLA_FALLBACK`. Tab `soon` gom hồ sơ mở sắp đến hạn hoặc đã quá hạn, ngưỡng theo mức ngập.
+
+### 6.6. Thanh tiến độ
+
+`flood_event_timelines` là nguồn duy nhất dựng dải "Tiến độ xử lý". Mỗi dòng chốt sẵn `step_name`, `user_display_snapshot` (tên - chức danh), `department_name_snapshot`, `note`.
+
+| `action_name`    | `step_name`                  | `note`                                        |
+| :--------------- | :--------------------------- | :-------------------------------------------- |
+| `INGEST_EVENT`   | Tiếp nhận sự kiện            | `Tiếp nhận từ công việc PAHT.…`               |
+| `ASSIGN_EVENT`   | Đã xác minh & giao việc      | `Giao cho <Tên - Chức danh>`                  |
+| `ACCEPT_EVENT`   | Cán bộ tiếp nhận xử lý       | Ghi chú tùy chọn                              |
+| `DECLINE_EVENT`  | Cán bộ từ chối nhận việc     | Lý do                                         |
+| `TRANSFER_EVENT` | Chuyển xử lý                 | `Chuyển việc cho <Tên>. <lý do>`              |
+| `REJECT_EVENT`   | Đánh dấu không hợp lệ        | Lý do                                         |
+| `MERGE_EVENT`    | Gộp vào sự kiện chính        | `Gộp vào FLD-…`                               |
+| `UNMERGE_EVENT`  | Tách khỏi sự kiện chính      | `Tách khỏi FLD-…` (người thực hiện: Hệ thống) |
+| `SUBMIT_RESULT`  | Báo cáo đã xử lý xong        | `submit_note`                                 |
+| `APPROVE_RESULT` | Quản trị xác nhận hoàn thành | `approve_note`                                |
+| `RETURN_RESULT`  | Quản trị chuyển lại xử lý    | `return_note`                                 |
+
+Dòng không có người thực hiện để trống hai cột snapshot; giao diện hiển thị "Hệ thống".
 
 ---
 
-### 5.2. Nhóm API dành cho Cán bộ & Quản trị
+## 7. CHUẨN TRIỂN KHAI TRONG REPO BACKEND
 
-> **Quy ước định danh trên API**: **không dùng path param**. API `POST` truyền `eventCode` trong **request body**; API `GET` truyền `code` qua **query params**.
+### 7.1. Cấu trúc module
 
-| Method | Endpoint                          | Body / Query                                                                          | Mô tả                                                                                                                                                                                            |
-| :----- | :-------------------------------- | :------------------------------------------------------------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | `/api/v1/flood-events`            | `page, limit, tab, q, cameraId, cameraGroupId, fromDate, toDate`                      | Hàng đợi phân trang theo tab (`pending`, `verified`, `submitted`, `done`, `merged`, `rejected`). Sắp xếp mặc định `last_detected_at DESC` để sự kiện đang leo thang nổi lên đầu.                 |
-| `GET`  | `/api/v1/flood-events/stats`      | `fromDate, toDate`                                                                    | Đếm số sự kiện theo từng tab (badge).                                                                                                                                                            |
-| `GET`  | `/api/v1/flood-events/cameras`    | `{}`                                                                                  | Danh sách camera (điểm ngập) đã từng phát sinh sự kiện — đổ vào bộ lọc "Điểm ngập".                                                                                                              |
-| `GET`  | `/api/v1/flood-events/detail`     | `code` (Query)                                                                        | Chi tiết: thông tin camera, đối tượng AI, ảnh, dải tiến độ (timelines), sự kiện trùng, sự kiện cha.                                                                                              |
-| `POST` | `/api/v1/flood-events/accept`     | `{ eventCode, floodLevel, assignedUserId, duplicateEventCode?, isUrgentAlert, note }` | **Nhận việc**: gán mức ngập/cán bộ, gộp trùng, tùy chọn phát cảnh báo khẩn; marker đổi sang trạng thái đã xác minh.                                                                              |
-| `POST` | `/api/v1/flood-events/reject`     | `{ eventCode, reason }`                                                               | Đánh dấu **Không hợp lệ** (bắt buộc lý do).                                                                                                                                                      |
-| `POST` | `/api/v1/flood-events/merge`      | `{ masterEventCode, duplicateEventCode, note }`                                       | Gộp **một** sự kiện vào một sự kiện chính.                                                                                                                                                       |
-| `POST` | `/api/v1/flood-events/unmerge`    | `{ eventCode }`                                                                       | Tách sự kiện khỏi nhóm gộp, đưa về `PENDING`.                                                                                                                                                    |
-| `POST` | `/api/v1/flood-events/submit`     | `{ eventCode, submitNote, reportedByUserId, afterPhotoUrls[] }`                       | **Báo cáo đã xử lý xong** (bắt buộc ≥1 ảnh sau xử lý).                                                                                                                                           |
-| `POST` | `/api/v1/flood-events/approve`    | `{ eventCode, approveNote }`                                                          | **Xác nhận hoàn thành**, marker rời bản đồ.                                                                                                                                                      |
-| `POST` | `/api/v1/flood-events/return`     | `{ eventCode, returnNote }`                                                           | **Chuyển lại cán bộ xử lý** (bắt buộc lý do).                                                                                                                                                    |
-| `GET`  | `/api/v1/flood-map/active-points` | `{}`                                                                                  | Lớp bản đồ hiện trường: mọi sự kiện `status IN ('PENDING','VERIFIED','SUBMITTED')`, gom theo `camera_id`. Payload rút gọn (tọa độ, tên camera, mức ngập, trạng thái xác minh), không phân trang. |
-| `GET`  | `/api/v1/flood-reports/summary`   | `fromDate, toDate, cameraId, cameraGroupId`                                           | Báo cáo: số sự kiện theo camera/mức ngập, tỷ lệ cảnh báo sai theo camera.                                                                                                                        |
+| Tệp                                                                   | Vai trò                                                        |
+| :-------------------------------------------------------------------- | :------------------------------------------------------------- |
+| `flood-events/flood-events.controller.ts`                             | Route §4.2; không chứa logic                                   |
+| `flood-events/flood-events.service.ts`                                | Quy tắc nghiệp vụ, transaction, các hàm nhận việc từ Công việc |
+| `flood-events/flood-events-work-item.adapter.ts`                      | Cài đặt `WorkItemModuleAdapter` cho `FLOOD_EVENTS`             |
+| `flood-events/flood-work-item-snapshot.ts`                            | Hàm thuần: hồ sơ → snapshot đồng bộ về Công việc               |
+| `flood-events/flood-deduplication.service.ts`                         | Ghi/gỡ liên kết trùng do Công việc xác nhận                    |
+| `flood-events/flood-code-generator.service.ts`                        | Sinh `event_code`                                              |
+| `flood-events/flood-notification.factory.ts`                          | Dựng thông báo, không chạm DB                                  |
+| `flood-events/flood-events.deadline.ts`, `flood-timeline-snapshot.ts` | Hàm thuần: trạng thái hạn, nhãn timeline                       |
+| `work-items/work-items-flood-ingest.controller.ts`                    | Route `POST /flood-events/ingest` (§4.1)                       |
+| `work-items/work-item-citizen-reports.service.ts`                     | Lịch sử phản ánh người dân (§3.3)                              |
 
----
+`FloodEventsModule` import `WorkItemsCoreModule` (projection, ledger, trace); `WorkItemsModule` import `FloodEventsModule` để đăng ký adapter. Hai module không import ngược nhau.
 
-## 6. CHUẨN TRIỂN KHAI TRONG REPO BACKEND
+### 7.2. Sai lệch có chủ ý so với AGENT.md
 
-Phần này ràng buộc tài liệu với `quan-ly-hien-truong-be/AGENT.md`. Đọc trước khi viết dòng code đầu tiên.
+- **Khóa chính UUID tự khai báo**, không kế thừa `BaseEntity`; `flood_events.id` dùng lại id công việc.
+- **Không dùng path param**: định danh bằng `event_code` qua body (`POST`) hoặc query (`GET`).
 
-### 6.1. Cấu trúc module
+### 7.3. Kiểm thử
 
-Module đặt tại `src/modules/flood-events/` (tên thư mục số nhiều, viết thường). Các tệp cùng tên module:
-
-| Tệp                            | Vai trò                                                                                          |
-| :----------------------------- | :----------------------------------------------------------------------------------------------- |
-| `flood-events.module.ts`       | Khai báo module, đăng ký entity                                                                  |
-| `flood-events.controller.ts`   | Parse request, gọi service, mang decorator route. **Không** chứa logic nghiệp vụ hay truy vấn DB |
-| `flood-events.service.ts`      | Toàn bộ quy tắc nghiệp vụ, transaction, orchestration repository                                 |
-| `flood-events.dto.ts`          | DTO vào/ra, validate bằng class-validator                                                        |
-| `flood-events.entity.ts`       | `FloodEvent`, `FloodEventTimeline`, `FloodEventDuplicate`                                        |
-| `flood-events.service.spec.ts` | Unit test cho service                                                                            |
-
-Quy tắc bắt buộc:
-
-- Entity **không** kế thừa `BaseEntity` (vì khóa chính là UUID) — tự khai báo `@PrimaryGeneratedColumn('uuid')` cùng `@CreateDateColumn` / `@UpdateDateColumn` / `@DeleteDateColumn` đúng như `BaseEntity` định nghĩa, để hành vi timestamp và soft delete không lệch. Quan hệ khai báo `eager: false`, load tường minh nơi cần.
-- Cột optimistic lock dùng `@VersionColumn`.
-- Thao tác ghi nhiều bảng (nhận việc + ghi timeline + gộp trùng) đi qua **transaction helper** trong `src/database`.
-- Không import repository của module khác; cần thông tin người dùng thì gọi `UsersService`.
-- Ảnh sau xử lý dùng **module `uploads`** sẵn có để lấy URL, phân hệ ngập chỉ lưu URL vào `after_photos`.
-- Toàn bộ code và comment viết bằng **tiếng Anh**; tiếng Việt chỉ xuất hiện ở nội dung cán bộ đọc.
-
-### 6.2. Phân quyền — cần bổ sung realm
-
-Realm hiện chỉ đặt chỗ **`flood.point.manage`** và composite **`flood-manager`**. Các action role dưới đây **chưa tồn tại**, phải thêm vào `keycloak/realm-phohien.json`, mirror sang `src/modules/auth/auth.constants.ts` (test so hai bên như hai tập hợp), rồi chạy `pnpm run keycloak:apply` — sửa file realm thôi không có tác dụng.
-
-| Action role           | Dùng cho                                   |
-| :-------------------- | :----------------------------------------- |
-| `flood.event.ingest`  | Service account AI Box đẩy sự kiện         |
-| `flood.event.view`    | Xem hàng đợi, chi tiết, bản đồ, báo cáo    |
-| `flood.event.manage`  | Nhận việc, đánh dấu không hợp lệ, gộp/tách |
-| `flood.event.process` | Báo cáo đã xử lý xong                      |
-| `flood.event.approve` | Duyệt kết quả / chuyển lại xử lý           |
-
-Composite theo đúng mẫu các phân hệ khác, mỗi composite **phải chứa `staff-base`**, lồng đúng một cấp, và mọi action role cũng thuộc `admin`:
-
-`flood-receiver` · `flood-handler` · `flood-approver` · `flood-manager`
-
-Guard chỉ kiểm tra **action role**, không kiểm tra composite. Hai quy tắc không hệ phân quyền nào diễn đạt được, viết trong service: **chỉ cán bộ được giao mới thao tác được hồ sơ của mình**, và **chỉ cho phép chuyển trạng thái hợp lệ từ trạng thái hiện tại**.
-
-### 6.3. Hợp đồng API
-
-- Prefix `/api/v1`, resource số nhiều `/flood-events`.
-- Endpoint danh sách nhận `page`, `limit` qua `PaginationDto` (trần 100 enforce ở tầng validate).
-- Mọi body/query không tầm thường đều có DTO; thuộc tính lạ bị global pipe từ chối.
-- Response dùng đúng một khuôn trong `src/base/response.type.ts` (`buildSuccess` / `buildPaginate`). Service ném exception của Nest, global filter định hình lỗi — **không try/catch trong controller**.
-- Sau mỗi lần đổi DTO: chạy `pnpm run openapi:export` và commit `openapi.json`, nếu không CI đỏ.
-
-### 6.4. Sai lệch có chủ ý so với AGENT.md
-
-Ghi rõ để reviewer không coi là lỗi, và nên bổ sung vào mục _Known deviations_ của AGENT.md:
-
-- **Khóa chính là UUID, không phải auto-increment integer.** AGENT.md nêu `BaseEntity` với khóa số tự tăng và coi `users` là ngoại lệ duy nhất. Ba bảng của phân hệ ngập dùng UUID theo yêu cầu thiết kế, nên không kế thừa `BaseEntity` mà khai báo lại đúng bốn cột của nó. Không có bảng nào ngoài phân hệ này trỏ khóa ngoại vào đây, nên khác kiểu khóa không lan sang phần còn lại của hệ thống.
-- **Không dùng path param.** AGENT.md quy định `GET /resources/:id` và `POST /resources/:id/action-name`. Phân hệ ngập định danh bằng `event_code` (mã nghiệp vụ cán bộ đọc), truyền qua **body với `POST`** và **query với `GET`**. Kéo theo không dùng `ParseIntPipe` cho route param.
-
-### 6.5. Cổng chất lượng
-
-Chạy đủ trước mỗi commit, CI chạy đúng bộ này:
-
-```bash
-pnpm run lint:check
-pnpm run format:check
-pnpm run typecheck
-pnpm test
-pnpm run openapi:check
-pnpm run build
-```
-
-Test cần phủ: khuôn response, hình dạng lỗi, validate, hành vi 401/403, chuyển trạng thái không hợp lệ, dò trùng theo camera, idempotency khi AI Box gửi lại cùng `event_id`, và rollback transaction.
+| Nhóm              | Ca kiểm thử                                                                                                                           | Trạng thái      |
+| :---------------- | :------------------------------------------------------------------------------------------------------------------------------------ | :-------------- |
+| Adapter           | `canAccept` (lĩnh vực, mức ngập, 1 người), trạng thái kết thúc/từ chối, danh mục, dữ liệu camera, ảnh, nguồn đến sau, xác nhận trùng  | Unit            |
+| Đồng bộ           | Chưa giao ↔ `null`, `DONE` có `completed_at`, lý do chỉ khi `REJECTED`, liên kết trùng chỉ khi `MERGED`, cửa sổ tương quan            | Unit            |
+| Gộp/tách          | Không cộng số lượt, bỏ người giữ, dùng lại dòng liên kết, chống gộp lồng                                                              | Unit            |
+| Ingest            | Cùng nguồn với `camera-events`, không lọc độ tin cậy, không lưu `stream_url`, bỏ tọa độ sai, thiếu `camera.id` → `400`                | Unit            |
+| Lịch sử người dân | Năm trạng thái, ẩn lý do khi không thông báo, ảnh sau xử lý chỉ khi xong, ẩn ảnh camera, theo công việc gốc khi đã gộp                | Unit            |
+| Luồng đầu–cuối    | Camera → Công việc → phân loại → giao → tiếp nhận → báo cáo → duyệt → người dân tra cứu; từ chối nhận việc rồi giao lại; chuyển xử lý | **Chưa có e2e** |
+| Migration         | Lên → rollback → lên lại                                                                                                              | **Chưa chạy**   |
